@@ -78,7 +78,7 @@ func (a *App) runProjectSearch(ready chan<- projectSearchReady) (uintptr, error)
 			return nil
 		}
 		id := results[index].id
-		if _, err := a.timerAction("start", id); err != nil {
+		if err := a.timerAction("start", id); err != nil {
 			return setText(status, "Cannot change project: "+err.Error())
 		}
 		hide()
@@ -122,7 +122,7 @@ func (a *App) runProjectSearch(ready chan<- projectSearchReady) (uintptr, error)
 		}
 		reminderUser.NewProc("EnableWindow").Call(choose, enabled)
 		if len(results) == 0 {
-			return setText(status, "No matching projects. Try another number, name, customer, or parent.")
+			return setText(status, "No matching projects. Try a number, name, customer, parent, or property.")
 		}
 		reminderUser.NewProc("SendMessageW").Call(list, 0x0186, selected, 0) // LB_SETCURSEL
 		return setText(status, fmt.Sprintf("%d projects. Arrow keys to select, Enter to switch, Escape to close.", len(results)))
@@ -221,7 +221,7 @@ func (a *App) runProjectSearch(ready chan<- projectSearchReady) (uintptr, error)
 		x, y, w, h  int32
 		target      *uintptr
 	}{
-		{"STATIC", "Search all projects by number, name, customer, or parent:", 0x50000000, 200, 16, 12, 640, 22, &label},
+		{"STATIC", "Search by number, name, customer, parent, or custom properties:", 0x50000000, 200, 16, 12, 640, 22, &label},
 		{"EDIT", "", 0x50810080, 201, 16, 38, 640, 28, &edit},
 		{"LISTBOX", "", 0x50B10101, 202, 16, 78, 640, 232, &list},
 		{"STATIC", "", 0x50000000, 205, 16, 318, 640, 36, &status},

@@ -90,6 +90,32 @@ func TestAppQuitSaveFailurePreservesTimer(t *testing.T) {
 	}
 }
 
+func TestAppTemporaryQuitSaveFailurePreservesTimer(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "data")
+	store, err := tracker.Open(filepath.Join(dir, "data.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StartTemporaryTimer(); err != nil {
+		t.Fatal(err)
+	}
+	before := store.Snapshot()
+	if err := os.Rename(dir, dir+"-backup"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir, []byte("block data directory"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{store: store}
+	if err := app.QuitApplication(); err == nil || !strings.Contains(err.Error(), "save timer before quitting") {
+		t.Fatalf("temporary quit error = %v, want save failure", err)
+	}
+	after := store.Snapshot()
+	if after.Active == nil || *after.Active != *before.Active || len(after.Bookings) != len(before.Bookings) || app.quitRequested.Load() {
+		t.Fatal("failed temporary quit changed timer or authorized quitting")
+	}
+}
+
 func TestAppGetStateReturnsStoreSnapshot(t *testing.T) {
 	store, err := tracker.Open(filepath.Join(t.TempDir(), "data.json"))
 	if err != nil {

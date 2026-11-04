@@ -9,11 +9,14 @@ import {
   RestoreProject,
   SaveBooking,
   SaveProject,
+  PauseTimer,
+  ResumeTimer,
   StopTimer,
   ToggleFavorite,
   ToggleTimer,
   SaveSettings,
   SavePropertyDefinition,
+  MovePropertyDefinition,
   DeletePropertyDefinition,
   TestReminder,
   RunInBackground,
@@ -21,10 +24,12 @@ import {
   UpdateTimerStart,
   StartTemporaryTimer,
   AssignTemporaryTimer,
+  DiscardTemporaryTimer,
 } from '../wailsjs/go/main/App';
 import {main, tracker} from '../wailsjs/go/models';
 import {EventsOn, WindowSetDarkTheme, WindowSetLightTheme} from '../wailsjs/runtime/runtime';
 import App from './App';
+import wailsConfig from '../../wails.json';
 
 vi.mock('../wailsjs/go/main/App', () => ({
   DeleteBooking: vi.fn(),
@@ -34,11 +39,14 @@ vi.mock('../wailsjs/go/main/App', () => ({
   RestoreProject: vi.fn(),
   SaveBooking: vi.fn(),
   SaveProject: vi.fn(),
+  PauseTimer: vi.fn(),
+  ResumeTimer: vi.fn(),
   StopTimer: vi.fn(),
   ToggleFavorite: vi.fn(),
   ToggleTimer: vi.fn(),
   SaveSettings: vi.fn(),
   SavePropertyDefinition: vi.fn(),
+  MovePropertyDefinition: vi.fn(),
   DeletePropertyDefinition: vi.fn(),
   TestReminder: vi.fn(),
   RunInBackground: vi.fn(),
@@ -46,6 +54,7 @@ vi.mock('../wailsjs/go/main/App', () => ({
   UpdateTimerStart: vi.fn(),
   StartTemporaryTimer: vi.fn(),
   AssignTemporaryTimer: vi.fn(),
+  DiscardTemporaryTimer: vi.fn(),
 }));
 
 vi.mock('../wailsjs/runtime/runtime', () => ({
@@ -89,6 +98,7 @@ function state(overrides: Partial<main.State> = {}): main.State {
   initial.projects = [alpha];
   initial.bookings = [];
   initial.active = undefined;
+  initial.pausedProjectId = '';
   initial.settings = Object.assign(new tracker.Settings(), {theme: 'light', reminders: defaultReminders()});
   initial.propertyDefinitions = [];
   return Object.assign(initial, overrides);
@@ -102,6 +112,11 @@ async function renderLoaded(initialState = state()) {
   vi.mocked(GetState).mockResolvedValue(initialState);
   render(<App />);
   await screen.findByRole('heading', {name: 'Time & calendar'});
+}
+
+async function selectProject(user: ReturnType<typeof userEvent.setup>, label: string, project: RegExp) {
+  await user.click(screen.getByRole('combobox', {name: label}));
+  await user.click(await screen.findByRole('button', {name: project}));
 }
 
 function requestClose() {
@@ -119,12 +134,15 @@ describe('TimeManager workspace', () => {
     vi.mocked(RestoreProject).mockReset().mockResolvedValue();
     vi.mocked(SaveBooking).mockReset().mockResolvedValue();
     vi.mocked(SaveProject).mockReset().mockResolvedValue();
+    vi.mocked(PauseTimer).mockReset().mockResolvedValue();
+    vi.mocked(ResumeTimer).mockReset().mockResolvedValue();
     vi.mocked(StopTimer).mockReset().mockResolvedValue();
     vi.mocked(ToggleFavorite).mockReset().mockResolvedValue();
     vi.mocked(ToggleTimer).mockReset().mockResolvedValue();
     vi.mocked(EventsOn).mockClear();
     vi.mocked(SaveSettings).mockReset().mockResolvedValue();
     vi.mocked(SavePropertyDefinition).mockReset().mockResolvedValue();
+    vi.mocked(MovePropertyDefinition).mockReset().mockResolvedValue();
     vi.mocked(DeletePropertyDefinition).mockReset().mockResolvedValue();
     vi.mocked(TestReminder).mockReset().mockResolvedValue();
     vi.mocked(RunInBackground).mockReset().mockResolvedValue();
@@ -132,8 +150,108 @@ describe('TimeManager workspace', () => {
     vi.mocked(UpdateTimerStart).mockReset().mockResolvedValue();
     vi.mocked(StartTemporaryTimer).mockReset().mockResolvedValue();
     vi.mocked(AssignTemporaryTimer).mockReset().mockResolvedValue();
+    vi.mocked(DiscardTemporaryTimer).mockReset().mockResolvedValue();
     vi.mocked(WindowSetDarkTheme).mockClear();
     vi.mocked(WindowSetLightTheme).mockClear();
+  });
+
+  it.each(['favorites', 'directory'])('searches assigned custom property names and values in %s', async surface => {
+    const user = userEvent.setup();
+    const definitions = [
+      {id: 'text', name: 'Contact', type: 'text', options: []},
+      {id: 'number', name: 'Rate', type: 'number', options: []},
+      {id: 'check', name: 'Billable', type: 'checkbox', options: []},
+      {id: 'drop', name: 'Stage', type: 'dropdown', options: ['Closed']},
+      {id: 'unset', name: 'Unset field', type: 'text', options: []},
+    ];
+    const enriched = {...alpha, properties: {text: 'Jane Smith', number: '125.5', check: 'false', drop: 'Closed', deleted: 'orphan'}};
+    const other = {...alpha, id: 'other', name: 'Other', number: '300'};
+    await renderLoaded(state({projects: [enriched, other, archived], propertyDefinitions: definitions}));
+    if (surface === 'directory') await user.click(screen.getByRole('button', {name: 'Projects'}));
+    const input = surface === 'directory'
+      ? screen.getByRole('textbox', {name: 'Search projects'})
+      : screen.getByRole('searchbox', {name: 'Search favorite projects'});
+    for (const query of ['CONTACT', 'jAnE', '125.5', 'rate', 'billable', 'false', 'no', 'stage', 'closed']) {
+      fireEvent.change(input, {target: {value: query}});
+      expect(surface === 'directory'
+        ? screen.getByText('100 - Alpha')
+        : screen.getByRole('button', {name: 'Start timer for 100 Alpha'})).toBeInTheDocument();
+      expect(surface === 'directory'
+        ? screen.queryByText('300 - Other')
+        : screen.queryByRole('button', {name: 'Start timer for 300 Other'})).not.toBeInTheDocument();
+    }
+    for (const query of ['unset field', 'orphan', 'true', 'yes']) {
+      fireEvent.change(input, {target: {value: query}});
+      expect(surface === 'directory'
+        ? screen.queryByText('100 - Alpha')
+        : screen.queryByRole('button', {name: 'Start timer for 100 Alpha'})).not.toBeInTheDocument();
+    }
+  });
+
+  it('reorders project properties and keeps boundaries disabled', async () => {
+    const user = userEvent.setup();
+    const definitions = [
+      {id: 'cost', name: 'Cost center', type: 'text', options: []},
+      {id: 'rate', name: 'Hourly rate', type: 'number', options: []},
+    ];
+    await renderLoaded(state({propertyDefinitions: definitions}));
+    await user.click(screen.getByRole('button', {name: /^Settings$/}));
+    expect(screen.getByRole('button', {name: 'Move property Cost center up'})).toBeDisabled();
+    expect(screen.getByRole('button', {name: 'Move property Cost center up'})).toHaveAttribute('title', 'This property is already first.');
+    expect(screen.getByRole('button', {name: 'Move property Cost center down'})).not.toHaveAttribute('title');
+    expect(screen.getByRole('button', {name: 'Move property Hourly rate down'})).toBeDisabled();
+    expect(screen.getByRole('button', {name: 'Move property Hourly rate down'})).toHaveAttribute('title', 'This property is already last.');
+    await user.click(screen.getByRole('button', {name: 'Edit property Cost center'}));
+    expect(screen.getByRole('button', {name: 'Add property'})).toHaveAttribute('title', 'Finish or cancel the property you are editing first.');
+    expect(screen.getByText('Property type').closest('label')).toHaveAttribute('title', 'Existing property types cannot be changed.');
+    await user.click(screen.getByRole('button', {name: 'Cancel'}));
+    expect(screen.getByRole('button', {name: 'Add property'})).toBeEnabled();
+    vi.mocked(GetState).mockResolvedValue(state({propertyDefinitions: [...definitions].reverse()}));
+    await user.click(screen.getByRole('button', {name: 'Move property Hourly rate up'}));
+    expect(MovePropertyDefinition).toHaveBeenCalledWith('rate', -1);
+    await waitFor(() => expect(screen.getByRole('button', {name: 'Move property Hourly rate up'})).toBeDisabled());
+    const rows = screen.getAllByRole('row');
+    expect(within(rows[1]).getByText('Hourly rate')).toBeInTheDocument();
+    vi.mocked(MovePropertyDefinition).mockRejectedValueOnce(new Error('Could not save order'));
+    await user.click(screen.getByRole('button', {name: 'Move property Hourly rate down'}));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not save order');
+    expect(within(screen.getAllByRole('row')[1]).getByText('Hourly rate')).toBeInTheDocument();
+  });
+
+  it('shows the application version from wails.json in settings', async () => {
+    const user = userEvent.setup();
+    await renderLoaded();
+    await user.click(screen.getByRole('button', {name: /^Settings$/}));
+    expect(__APP_VERSION__).toBe(wailsConfig.info.productVersion);
+    expect(screen.getByText('TimeManager version', {exact: false})).toHaveTextContent(`TimeManager version ${wailsConfig.info.productVersion}`);
+  });
+
+  it('saves the temporary booking policy without changing other settings', async () => {
+    const user = userEvent.setup();
+    await renderLoaded();
+    await user.click(screen.getByRole('button', {name: /^Settings$/}));
+    expect(screen.getByLabelText('Temporary booking behavior')).toHaveValue('allow');
+    await user.selectOptions(screen.getByLabelText('Temporary booking behavior'), 'require');
+    expect(SaveSettings).toHaveBeenCalledWith(expect.objectContaining({
+      requireTemporaryProject: true, theme: 'light', reminders: defaultReminders(),
+    }));
+  });
+
+  it('shows ISO week-years in both calendar views and across New Year navigation', async () => {
+    const user = userEvent.setup();
+    await renderLoaded();
+    fireEvent.change(screen.getByLabelText('Week of'), {target: {value: '2027-01-01'}});
+    expect(screen.getByText('CW53')).toBeInTheDocument();
+    expect(screen.getByText('CW53').parentElement).toHaveClass('calendar-date-range');
+    expect(screen.getByLabelText('Week of')).not.toHaveAttribute('aria-describedby');
+    await user.selectOptions(screen.getByLabelText('Calendar view'), 'summary');
+    expect(screen.getByText('CW53')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', {name: 'Next week'}));
+    expect(screen.getByText('CW01')).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText('Calendar view'), 'details');
+    expect(screen.getByText('CW01')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Week of'), {target: {value: '2024-12-30'}});
+    expect(screen.getByText('CW01')).toBeInTheDocument();
   });
 
   it('loads the workspace and registers cleanup for Wails events', async () => {
@@ -154,6 +272,139 @@ describe('TimeManager workspace', () => {
     vi.mocked(StartTemporaryTimer).mockRejectedValueOnce(new Error('Cannot save temporary timer'));
     await user.click(screen.getByRole('button', {name: 'Start temporary timer'}));
     expect(await screen.findByRole('alert')).toHaveTextContent('Cannot save temporary timer');
+  });
+
+  it('stops a temporary timer without requiring project assignment', async () => {
+    const user = userEvent.setup();
+    const temp = {...alpha, id: 'timemanager-temporary-project', name: 'Temporary / Unassigned'};
+    const timer = Object.assign(new main.Timer(), {projectId: temp.id, start: new Date().toISOString()});
+    await renderLoaded(state({projects: [alpha, temp], active: timer}));
+
+    expect(screen.getByRole('group', {name: 'Timer actions'})).toBeInTheDocument();
+    await user.click(screen.getByRole('button', {name: 'Stop & save'}));
+
+    expect(StopTimer).toHaveBeenCalledOnce();
+    expect(AssignTemporaryTimer).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog', {name: 'Assign temporary time'})).not.toBeInTheDocument();
+  });
+
+  it('pauses and resumes timers through the timer panel', async () => {
+    const user = userEvent.setup();
+    const timer = Object.assign(new main.Timer(), {projectId: alpha.id, start: new Date(Date.now() - 60_000).toISOString()});
+    await renderLoaded(state({active: timer}));
+    const pausedState = state({pausedProjectId: alpha.id});
+    vi.mocked(GetState).mockResolvedValueOnce(pausedState);
+    await user.click(screen.getByRole('button', {name: 'Pause'}));
+    expect(PauseTimer).toHaveBeenCalledOnce();
+
+    await waitFor(() => expect(screen.getByText('TIMER PAUSED')).toBeInTheDocument());
+    expect(screen.getByText(/resume to create a new booking segment/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', {name: 'Resume'})).toBeEnabled();
+    await user.click(screen.getByRole('button', {name: 'Resume'}));
+    expect(ResumeTimer).toHaveBeenCalledOnce();
+  });
+
+  it('sets the project of a running temporary session without stopping it', async () => {
+    const user = userEvent.setup();
+    const temp = {...alpha, id: 'timemanager-temporary-project', name: 'Temporary / Unassigned'};
+    const timer = Object.assign(new main.Timer(), {projectId: temp.id, start: '2026-11-03T11:00:00.1234567Z'});
+    await renderLoaded(state({projects: [alpha, temp], active: timer}));
+    await user.click(screen.getByRole('button', {name: 'Set project'}));
+    const dialog = screen.getByRole('dialog', {name: 'Assign temporary time'});
+    expect(within(dialog).getByText(/original start time; no booking is created/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', {name: 'Cancel'}));
+    expect(AssignTemporaryTimer).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', {name: 'Set project'}));
+    await selectProject(user, 'Assign to project', /100 - Alpha/);
+    await user.click(screen.getByRole('button', {name: 'Assign & continue'}));
+    expect(AssignTemporaryTimer).toHaveBeenCalledWith({timer, action: 'assign-running', id: ''}, alpha.id);
+    expect(StopTimer).not.toHaveBeenCalled();
+    expect(ToggleTimer).not.toHaveBeenCalled();
+  });
+
+  it.each(['stop', 'pause', 'toggle', 'favorite', 'start', 'quit'])('assigns temporary time before completing %s', async action => {
+    const user = userEvent.setup();
+    const temp = {...alpha, id: 'timemanager-temporary-project', name: 'Temporary / Unassigned', number: 'TEMP'};
+    const timer = Object.assign(new main.Timer(), {projectId: temp.id, start: new Date().toISOString()});
+    await renderLoaded(state({projects: [alpha, archived, temp], active: timer}));
+    const request = Object.assign(new main.TemporaryAssignment(), {timer, action, id: ['toggle', 'favorite', 'start'].includes(action) ? alpha.id : ''});
+    const listener = vi.mocked(EventsOn).mock.calls.find(([name]) => name === 'temporary-assignment-requested')?.[1];
+    if (!listener) throw new Error('Temporary assignment listener missing');
+    act(() => listener(request));
+    const dialog = screen.getByRole('dialog', {name: 'Assign temporary time'});
+    expect(within(dialog).getByRole('button', {name: 'Assign & continue'})).toBeDisabled();
+    await user.click(within(dialog).getByRole('combobox', {name: 'Assign to project'}));
+    const projectChoices = screen.getByRole('list', {name: 'Assign to project hierarchy'});
+    expect(within(projectChoices).queryByRole('button', {name: /Archived/})).not.toBeInTheDocument();
+    expect(within(projectChoices).queryByRole('button', {name: /Temporary/})).not.toBeInTheDocument();
+    await user.click(within(projectChoices).getByRole('button', {name: /100 - Alpha/}));
+    await user.click(within(dialog).getByRole('button', {name: 'Assign & continue'}));
+    expect(AssignTemporaryTimer).toHaveBeenCalledWith(request, alpha.id);
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+  });
+
+  it.each(['stop', 'pause', 'toggle', 'quit', 'assign-running'])('discards temporary time without assignment for %s', async action => {
+    const user = userEvent.setup();
+    const timer = Object.assign(new main.Timer(), {projectId: 'timemanager-temporary-project', start: new Date().toISOString()});
+    await renderLoaded(state({projects: [], active: timer}));
+    const listener = vi.mocked(EventsOn).mock.calls.find(([name]) => name === 'temporary-assignment-requested')?.[1];
+    if (!listener) throw new Error('Temporary assignment listener missing');
+    act(() => listener({timer, action, id: ''}));
+    const dialog = screen.getByRole('dialog', {name: 'Assign temporary time'});
+    await user.click(within(dialog).getByRole('button', {name: 'Cancel booking'}));
+    expect(DiscardTemporaryTimer).toHaveBeenCalledWith(timer);
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    expect(AssignTemporaryTimer).not.toHaveBeenCalled();
+    expect(QuitApplication).not.toHaveBeenCalled();
+    expect(ToggleTimer).not.toHaveBeenCalled();
+  });
+
+  it('keeps discard errors visible without closing the assignment dialog', async () => {
+    const user = userEvent.setup();
+    await renderLoaded();
+    const timer = Object.assign(new main.Timer(), {projectId: 'timemanager-temporary-project', start: new Date().toISOString()});
+    const listener = vi.mocked(EventsOn).mock.calls.find(([name]) => name === 'temporary-assignment-requested')?.[1];
+    if (!listener) throw new Error('Temporary assignment listener missing');
+    act(() => listener({timer, action: 'stop', id: ''}));
+    vi.mocked(DiscardTemporaryTimer).mockRejectedValueOnce(new Error('Discard could not be saved'));
+    const dialog = screen.getByRole('dialog', {name: 'Assign temporary time'});
+    await user.click(within(dialog).getByRole('button', {name: 'Cancel booking'}));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Discard could not be saved');
+    expect(dialog).toBeInTheDocument();
+  });
+
+  it('keeps temporary assignment errors visible and lets Cancel keep tracking', async () => {
+    const user = userEvent.setup();
+    const timer = Object.assign(new main.Timer(), {projectId: 'timemanager-temporary-project', start: new Date().toISOString()});
+    await renderLoaded();
+    const request = Object.assign(new main.TemporaryAssignment(), {timer, action: 'quit', id: ''});
+    const listener = vi.mocked(EventsOn).mock.calls.find(([name]) => name === 'temporary-assignment-requested')?.[1];
+    if (!listener) throw new Error('Temporary assignment listener missing');
+    act(() => listener(request));
+    const dialog = screen.getByRole('dialog', {name: 'Assign temporary time'});
+    await selectProject(user, 'Assign to project', /100 - Alpha/);
+    vi.mocked(AssignTemporaryTimer).mockRejectedValueOnce(new Error('Save failed; timer unchanged'));
+    await user.click(within(dialog).getByRole('button', {name: 'Assign & continue'}));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Save failed; timer unchanged');
+    await user.click(within(dialog).getByRole('button', {name: 'Cancel'}));
+    expect(dialog).not.toBeInTheDocument();
+    expect(StopTimer).not.toHaveBeenCalled();
+    expect(QuitApplication).not.toHaveBeenCalled();
+  });
+
+  it('explains how to assign temporary time when no other project exists', async () => {
+    const user = userEvent.setup();
+    const temp = {...alpha, id: 'timemanager-temporary-project', name: 'Temporary / Unassigned'};
+    const timer = Object.assign(new main.Timer(), {projectId: temp.id, start: new Date().toISOString()});
+    await renderLoaded(state({projects: [temp], active: timer}));
+    const listener = vi.mocked(EventsOn).mock.calls.find(([name]) => name === 'temporary-assignment-requested')?.[1];
+    if (!listener) throw new Error('Temporary assignment listener missing');
+    act(() => listener({timer, action: 'stop', id: ''}));
+    expect(screen.getByText('No project is available. Cancel and create a project first.')).toBeInTheDocument();
+    expect(screen.getByRole('button', {name: 'Assign & continue'})).toBeDisabled();
+    await user.click(screen.getByRole('button', {name: 'Cancel'}));
+    expect(AssignTemporaryTimer).not.toHaveBeenCalled();
+    expect(StopTimer).not.toHaveBeenCalled();
   });
 
   it('shows a load error and retries the state request', async () => {
@@ -201,6 +452,8 @@ describe('TimeManager workspace', () => {
     expect(alphaCard).toHaveClass('active');
     expect(alphaCard).toHaveAttribute('aria-pressed', 'true');
     expect(within(alphaCard).getByText('RUNNING')).toHaveClass('running-badge');
+    expect(alphaCard.querySelector('.running-spinner')).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByRole('button', {name: 'Start timer for 101 Beta'}).querySelector('.running-spinner')).toBeNull();
     expect(screen.getByRole('button', {name: 'Start timer for 101 Beta'})).toHaveAttribute('aria-pressed', 'false');
     vi.mocked(GetState).mockResolvedValue(state({projects, active: Object.assign(new main.Timer(), {projectId: beta.id, start: new Date().toISOString()})}));
     await user.click(screen.getByRole('button', {name: 'Start timer for 101 Beta'}));
@@ -208,16 +461,20 @@ describe('TimeManager workspace', () => {
     expect(betaCard).toHaveClass('active');
     expect(screen.getByRole('button', {name: 'Start timer for 100 Alpha'})).not.toHaveClass('active');
     await user.click(screen.getByRole('button', {name: 'Projects'}));
-    const alphaRow = within(screen.getByRole('table')).getByText('100 - Alpha').closest('tr');
-    const betaRow = within(screen.getByRole('table')).getByText('101 - Beta').closest('tr');
-    if (!alphaRow || !betaRow) throw new Error('Project rows missing');
+    const directory = screen.getByRole('list', {name: 'Project directory hierarchy'});
+    const alphaRow = within(directory).getByText('100 - Alpha').closest('.directory-row');
+    const betaRow = within(directory).getByText('101 - Beta').closest('.directory-row');
+    if (!(alphaRow instanceof HTMLElement) || !(betaRow instanceof HTMLElement)) throw new Error('Project rows missing');
     expect(betaRow).toHaveClass('running-project');
     expect(within(betaRow).getByText('RUNNING')).toHaveClass('running-badge');
+    expect(betaRow.querySelector('.running-spinner')).toBeInTheDocument();
+    expect(alphaRow.querySelector('.running-spinner')).toBeNull();
     expect(alphaRow).not.toHaveClass('running-project');
     vi.mocked(GetState).mockResolvedValue(state({projects}));
     await user.click(screen.getByRole('button', {name: 'Stop & save'}));
     await waitFor(() => expect(betaRow).not.toHaveClass('running-project'));
     expect(screen.queryByText('RUNNING')).not.toBeInTheDocument();
+    expect(document.querySelector('.running-spinner')).toBeNull();
   });
 
   it('highlights a running non-favorite project in the directory', async () => {
@@ -225,10 +482,23 @@ describe('TimeManager workspace', () => {
     const project = {...alpha, favorite: false};
     await renderLoaded(state({projects: [project], active: Object.assign(new main.Timer(), {projectId: project.id, start: new Date().toISOString()})}));
     await user.click(screen.getByRole('button', {name: 'Projects'}));
-    const row = within(screen.getByRole('table')).getByText('100 - Alpha').closest('tr');
-    if (!row) throw new Error('Project row missing');
+    const directory = screen.getByRole('list', {name: 'Project directory hierarchy'});
+    const row = within(directory).getByText('100 - Alpha').closest('.directory-row');
+    if (!(row instanceof HTMLElement)) throw new Error('Project row missing');
     expect(row).toHaveClass('running-project');
     expect(within(row).getByText('RUNNING')).toBeInTheDocument();
+  });
+
+  it('displays subprojects inside their parent project tree branch', async () => {
+    const user = userEvent.setup();
+    const child = {...alpha, id: 'child', number: '101', name: 'Child', favorite: false, parentId: alpha.id};
+    await renderLoaded(state({projects: [alpha, child]}));
+    await user.click(screen.getByRole('button', {name: 'Projects'}));
+
+    const directory = screen.getByRole('list', {name: 'Project directory hierarchy'});
+    const parentBranch = within(directory).getByRole('button', {name: 'Collapse 100 Alpha'}).closest('li');
+    if (!(parentBranch instanceof HTMLElement)) throw new Error('Parent project branch missing');
+    expect(within(parentBranch).getByText('101 - Child')).toBeInTheDocument();
   });
 
   it.each(['101', '  bEtA  ', 'gLoBeX', 'Umbrella'])('filters favorites by number, name, customer, and parent hierarchy (%s)', async (query) => {
@@ -319,7 +589,8 @@ describe('TimeManager workspace', () => {
     const input = screen.getByLabelText('Timer start time');
     if (!(input instanceof HTMLInputElement)) throw new Error('Timer start is not an input');
     const next = '2026-01-01T08:30:00';
-    fireEvent.change(input, {target: {value: next}});
+    fireEvent.change(input, {target: {value: '2026-01-01'}});
+    fireEvent.change(screen.getByLabelText('Time for Timer start time'), {target: {value: '08:30:00'}});
     const saved = new Date(next).toISOString();
     vi.mocked(GetState).mockResolvedValue(state({active: Object.assign(new main.Timer(), {projectId: active.projectId, start: saved})}));
     await user.click(screen.getByRole('button', {name: 'Save start time'}));
@@ -426,7 +697,7 @@ describe('TimeManager workspace', () => {
     expect(within(dialog).getByLabelText('Project name')).toHaveValue('');
     expect(within(dialog).getByLabelText('Customer')).toHaveValue('Acme');
     expect(within(dialog).getByLabelText('Project color')).toHaveValue('#123456');
-    expect(within(dialog).getByLabelText('Parent project')).toHaveValue('parent');
+    expect(within(dialog).getByRole('combobox', {name: 'Parent project'})).toHaveTextContent('10 - Parent');
     expect(within(dialog).getByLabelText('Add to favorites')).not.toBeChecked();
     expect(within(dialog).getByLabelText('Cost center')).toHaveValue('CC-42');
     await user.click(within(dialog).getByRole('button', {name: 'Save project'}));
@@ -456,7 +727,9 @@ describe('TimeManager workspace', () => {
     await user.click(screen.getByRole('button', {name: 'Projects'}));
     await user.click(screen.getByLabelText('Show archived'));
     await user.click(screen.getByRole('button', {name: 'Copy project 200 Archived project'}));
-    expect(screen.getByLabelText('Parent project')).toHaveValue(archivedParent ? '' : parent.id);
+    expect(screen.getByRole('combobox', {name: 'Parent project'})).toHaveTextContent(
+      archivedParent ? 'None (top-level project)' : '10 - Alpha',
+    );
     expect(screen.getByLabelText('Add to favorites')).toBeEnabled();
     await user.type(screen.getByLabelText('Project name'), 'Archived copy');
     await user.click(screen.getByRole('button', {name: 'Save project'}));
@@ -519,6 +792,7 @@ describe('TimeManager workspace', () => {
     }) : undefined}));
     requestClose();
     const dialog = screen.getByRole('dialog', {name: 'Close TimeManager?'});
+    expect(within(dialog).queryByRole('button', {name: 'Close dialog'})).not.toBeInTheDocument();
     expect(within(dialog).getByRole('button', {name: 'Run in background'})).toBeEnabled();
     expect(within(dialog).getByRole('button', {name: 'Quit'})).toBeEnabled();
     await user.click(within(dialog).getByRole('button', {name: 'Cancel'}));
@@ -619,7 +893,7 @@ describe('TimeManager workspace', () => {
     expect(screen.queryByRole('list', {name: 'Project totals 2026-10-28'})).not.toBeInTheDocument();
     expect(within(screen.getByRole('region', {name: '2026-10-28'})).getByText('No bookings')).toBeInTheDocument();
     await user.click(screen.getByRole('button', {name: 'Next week'}));
-    expect(screen.queryByRole('list')).not.toBeInTheDocument();
+    expect(screen.queryByRole('list', {name: /^Project totals/})).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', {name: 'Previous week'}));
     expect(screen.getByRole('list', {name: 'Project totals 2026-10-26'})).toHaveTextContent('00:30:00');
   });
@@ -630,11 +904,58 @@ describe('TimeManager workspace', () => {
     expect(screen.getByText('Saved when stopped')).toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText('Calendar view'), 'summary');
     expect(screen.queryByText('Saved when stopped')).not.toBeInTheDocument();
-    expect(screen.queryByRole('list')).not.toBeInTheDocument();
+    expect(screen.queryByRole('list', {name: /^Project totals/})).not.toBeInTheDocument();
     expect(screen.getAllByText('No bookings')).toHaveLength(7);
     expect(screen.getByRole('button', {name: 'Stop & save'})).toBeEnabled();
     expect(StopTimer).not.toHaveBeenCalled();
     expect(ToggleTimer).not.toHaveBeenCalled();
+  });
+
+  it('can manually mark and unmark exported bookings while retaining precise timestamps', async () => {
+    const user = userEvent.setup();
+    const booking = Object.assign(new main.Booking(), {...existingBooking, start: '2026-10-26T09:00:00.1234567Z', end: '2026-10-26T10:00:00.7654321Z', exported: false});
+    await renderLoaded(state({bookings: [booking]}));
+    fireEvent.change(screen.getByLabelText('Week of'), {target: {value: '2026-10-26'}});
+    await user.click(screen.getByRole('button', {name: /Existing note/}));
+    await user.click(screen.getByLabelText('Exported'));
+    vi.mocked(GetState).mockResolvedValue(state({bookings: [Object.assign(new main.Booking(), {...booking, exported: true})]}));
+    await user.click(screen.getByRole('button', {name: 'Save booking'}));
+    expect(SaveBooking).toHaveBeenLastCalledWith(expect.objectContaining({exported: true, start: booking.start, end: booking.end}));
+    vi.mocked(GetState).mockResolvedValue(state({bookings: [Object.assign(new main.Booking(), {...booking, exported: true})]}));
+    await user.click(screen.getByRole('button', {name: /Existing note/}));
+    await user.click(screen.getByLabelText('Exported'));
+    await user.click(screen.getByRole('button', {name: 'Save booking'}));
+    expect(SaveBooking).toHaveBeenLastCalledWith(expect.objectContaining({exported: false}));
+  });
+
+  it('grays exported bookings and only fully exported daily project totals', async () => {
+    const user = userEvent.setup();
+    const bookings = [
+      Object.assign(new main.Booking(), {id:'one',projectId:alpha.id,start:'2026-10-26T09:00:00',end:'2026-10-26T10:00:00',notes:'marked',exported:true}),
+      Object.assign(new main.Booking(), {id:'two',projectId:alpha.id,start:'2026-10-26T10:00:00',end:'2026-10-26T11:00:00',notes:'unmarked',exported:false}),
+      Object.assign(new main.Booking(), {id:'three',projectId:alpha.id,start:'2026-10-27T09:00:00',end:'2026-10-27T10:00:00',notes:'all marked',exported:true}),
+    ];
+    await renderLoaded(state({bookings}));
+    fireEvent.change(screen.getByLabelText('Week of'), {target: {value:'2026-10-26'}});
+    expect(within(screen.getByRole('region',{name:'2026-10-26'})).getByRole('button', {name:/marked\s*Exported$/})).toHaveClass('exported-booking');
+    expect(screen.getByRole('button', {name:/unmarked$/})).not.toHaveClass('exported-booking');
+    await user.selectOptions(screen.getByLabelText('Calendar view'),'summary');
+    expect(within(screen.getByRole('list',{name:'Project totals 2026-10-26'})).getByRole('listitem')).not.toHaveClass('exported-booking');
+    expect(within(screen.getByRole('list',{name:'Project totals 2026-10-27'})).getByRole('listitem')).toHaveClass('exported-booking');
+  });
+
+  it('offers opt-in marking and excluding already exported bookings', async () => {
+    const user = userEvent.setup();
+    await renderLoaded();
+    await user.click(screen.getByRole('button',{name:'Export to Excel'}));
+    const mark = screen.getByLabelText('Mark fully included bookings as exported after saving');
+    const exclude = screen.getByLabelText('Exclude already exported bookings');
+    expect(mark).not.toBeChecked();
+    expect(exclude).not.toBeChecked();
+    await user.click(mark);
+    await user.click(exclude);
+    await user.click(screen.getByRole('button',{name:'Choose file & export'}));
+    expect(ExportBookings).toHaveBeenCalledWith(expect.any(String),expect.any(String),{markExported:true,excludeExported:true});
   });
 
   it('creates a booking for a selected project', async () => {
@@ -643,7 +964,7 @@ describe('TimeManager workspace', () => {
 
     await user.click(await screen.findByRole('button', {name: /^Add booking$/}));
     expect(screen.getByRole('dialog', {name: 'Add booking'})).toBeInTheDocument();
-    await user.selectOptions(screen.getByLabelText('Project'), alpha.id);
+    await selectProject(user, 'Project', /100 - Alpha/);
     await user.type(screen.getByLabelText('Notes'), 'Planning session');
     await user.click(screen.getByRole('button', {name: 'Save booking'}));
 
@@ -683,7 +1004,7 @@ describe('TimeManager workspace', () => {
     const through = throughControl.value;
     await user.click(within(dialog).getByRole('button', {name: 'Choose file & export'}));
 
-    expect(ExportBookings).toHaveBeenCalledWith(from, through);
+    expect(ExportBookings).toHaveBeenCalledWith(from, through, {markExported: false, excludeExported: false});
     expect(await screen.findByText('Excel export saved: C:\\exports\\TimeManager.xlsx')).toBeInTheDocument();
   });
 

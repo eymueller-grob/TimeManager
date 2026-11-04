@@ -201,6 +201,12 @@ func TestTrayStatus(t *testing.T) {
 	if !strings.Contains(text, "00:00:00") {
 		t.Fatalf("negative elapsed time: %s", text)
 	}
+	d.Active = nil
+	d.PausedProjectID = "p"
+	hex, text, running = trayStatus(d, now)
+	if hex != "#64748b" || running || !strings.Contains(text, "Paused") {
+		t.Fatalf("paused status: %s %s %v", hex, text, running)
+	}
 }
 
 func TestTooltipBoundsUTF16Length(t *testing.T) {

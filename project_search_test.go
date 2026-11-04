@@ -7,6 +7,41 @@ import (
 	"TimeManager/internal/tracker"
 )
 
+func TestProjectSearchProperties(t *testing.T) {
+	d := tracker.State{
+		PropertyDefinitions: []tracker.PropertyDefinition{
+			{ID: "text", Name: "Contact", Type: "text"},
+			{ID: "number", Name: "Rate", Type: "number"},
+			{ID: "check", Name: "Billable", Type: "checkbox"},
+			{ID: "drop", Name: "Stage", Type: "dropdown"},
+			{ID: "unset", Name: "Unset field", Type: "text"},
+		},
+		Projects: []tracker.Project{
+			{ID: "p", Name: "Alpha", Properties: map[string]string{"text": "Jane Smith", "number": "125.5", "check": "false", "drop": "Closed", "deleted": "orphan"}},
+			{ID: "child", Name: "Child", ParentID: "p"},
+			{ID: "old", Name: "Old", Archived: true, Properties: map[string]string{"text": "Jane"}},
+		},
+	}
+	for _, query := range []string{"CONTACT", "jAnE", "125.5", "rate", "billable", "false", "no", "stage", "closed", "alpha jane closed"} {
+		if got := projectSearchResults(d, query); len(got) != 1 || got[0].id != "p" {
+			t.Errorf("%q results = %#v", query, got)
+		}
+	}
+	for _, query := range []string{"unset field", "orphan", "true", "yes"} {
+		if got := projectSearchResults(d, query); len(got) != 0 {
+			t.Errorf("%q unexpectedly matched %#v", query, got)
+		}
+	}
+	d.Projects[0].Properties["check"] = "true"
+	if got := projectSearchResults(d, "yes"); len(got) != 1 {
+		t.Fatal("updated checkbox not searchable")
+	}
+	delete(d.Projects[0].Properties, "text")
+	if got := projectSearchResults(d, "jane"); len(got) != 0 {
+		t.Fatal("removed property retained in search")
+	}
+}
+
 func TestProjectSearchResults(t *testing.T) {
 	d := tracker.State{Projects: []tracker.Project{
 		{ID: "root", Number: "1", Name: "Umbrella", Customer: "Parent customer"},

@@ -33,7 +33,7 @@ func TestMigrateVersionOnePreservesData(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := reopened.Snapshot()
-	if d.Version != 4 || d.Settings.Theme != "light" || d.Settings.Reminders != DefaultReminders() || d.PropertyDefinitions == nil || d.Projects[0].ID != p.ID || !d.Active.Start.Equal(legacy.Active.Start) {
+	if d.Version != 7 || d.Settings.Theme != "light" || d.Settings.Reminders != DefaultReminders() || d.PropertyDefinitions == nil || d.Projects[0].ID != p.ID || !d.Active.Start.Equal(legacy.Active.Start) {
 		t.Fatalf("migration lost data: %#v", d)
 	}
 	saved, err := os.ReadFile(s.path)
@@ -41,7 +41,7 @@ func TestMigrateVersionOnePreservesData(t *testing.T) {
 		t.Fatal(err)
 	}
 	var persisted State
-	if err := json.Unmarshal(saved, &persisted); err != nil || persisted.Version != 4 {
+	if err := json.Unmarshal(saved, &persisted); err != nil || persisted.Version != 7 {
 		t.Fatalf("migration was not persisted: %v", err)
 	}
 	if _, err := Open(s.path); err != nil {

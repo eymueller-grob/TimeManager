@@ -72,6 +72,13 @@ func trayStatus(d tracker.State, now time.Time) (string, string, bool) {
 			}
 		}
 	}
+	if d.PausedProjectID != "" {
+		for _, p := range d.Projects {
+			if p.ID == d.PausedProjectID {
+				return p.Color, fmt.Sprintf("%s | Paused | %s", p.Name, p.Number), false
+			}
+		}
+	}
 	return "#64748b", "TimeManager - Stopped (no timer running)", false
 }
 
@@ -167,6 +174,7 @@ func (a *App) startTray() func() {
 		systray.Run(func() {
 			restore := systray.AddMenuItem("Open TimeManager", "Restore the window")
 			stop := systray.AddMenuItem("Stop and save timer", "Save the active booking")
+			pause := systray.AddMenuItem("Pause timer", "Save the current segment and pause tracking")
 			status := systray.AddMenuItem("No timer running", "Current timer")
 			status.Disable()
 			systray.AddSeparator()
@@ -256,6 +264,14 @@ func (a *App) startTray() func() {
 				} else {
 					stop.Disable()
 				}
+				pause.SetTitle("Pause timer")
+				pause.Disable()
+				if running {
+					pause.Enable()
+				} else if d.PausedProjectID != "" {
+					pause.SetTitle("Resume paused timer")
+					pause.Enable()
+				}
 				if hex != lastColor || running != lastRunning {
 					icon, err := trayIcon(hex, running)
 					if err != nil {
@@ -279,6 +295,7 @@ func (a *App) startTray() func() {
 					{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(tick.C)},
 					{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(restore.ClickedCh)},
 					{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(stop.ClickedCh)},
+					{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(pause.ClickedCh)},
 					{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(quit.ClickedCh)},
 					{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(search.ClickedCh)},
 					{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(temporary.ClickedCh)},
@@ -300,22 +317,31 @@ func (a *App) startTray() func() {
 					}
 					update()
 				case 4:
+					if a.store.Snapshot().Active != nil {
+						if err := a.PauseTimer(); err != nil {
+							a.showError(err)
+						}
+					} else if err := a.ResumeTimer(); err != nil {
+						a.showError(err)
+					}
+					update()
+				case 5:
 					a.restoreWindow()
 					if err := a.QuitApplication(); err != nil {
 						a.showError(err)
 					}
-				case 5:
+				case 6:
 					if err := a.openProjectSearch(); err != nil {
 						a.showError(fmt.Errorf("open project search: %w", err))
 					}
-				case 6:
+				case 7:
 					if err := a.StartTemporaryTimer(); err != nil {
 						a.showError(fmt.Errorf("start temporary timer: %w", err))
 					}
 					update()
 				default:
-					id := entries[selected-7].id
-					if _, err := a.timerAction("favorite", id); err != nil {
+					id := entries[selected-8].id
+					if err := a.timerAction("favorite", id); err != nil {
 						a.showError(fmt.Errorf("change tray project: %w", err))
 					}
 					update()

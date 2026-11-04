@@ -13,8 +13,9 @@ import (
 )
 
 type Settings struct {
-	Theme     string           `json:"theme"`
-	Reminders ReminderSettings `json:"reminders"`
+	RequireTemporaryProject bool             `json:"requireTemporaryProject"`
+	Theme                   string           `json:"theme"`
+	Reminders               ReminderSettings `json:"reminders"`
 }
 
 type ReminderSettings struct {
@@ -170,6 +171,26 @@ func (s *Store) DeletePropertyDefinition(id string) error {
 				}
 				return nil
 			}
+		}
+		return errors.New("property definition no longer exists")
+	})
+}
+
+func (s *Store) MovePropertyDefinition(id string, direction int) error {
+	return s.change(func(d *State) error {
+		if direction != -1 && direction != 1 {
+			return errors.New("property move direction must be -1 or 1")
+		}
+		for i, def := range d.PropertyDefinitions {
+			if def.ID != id {
+				continue
+			}
+			next := i + direction
+			if next < 0 || next >= len(d.PropertyDefinitions) {
+				return errors.New("property is already at the end of the list in that direction")
+			}
+			d.PropertyDefinitions[i], d.PropertyDefinitions[next] = d.PropertyDefinitions[next], d.PropertyDefinitions[i]
+			return nil
 		}
 		return errors.New("property definition no longer exists")
 	})

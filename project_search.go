@@ -36,7 +36,20 @@ func projectSearchResults(d tracker.State, query string) []projectSearchResult {
 			id = parent.ParentID
 		}
 		label := fmt.Sprintf("%s - %s (%s)", p.Number, path, p.Customer)
-		text := strings.ToLower(label)
+		text := label
+		for _, def := range d.PropertyDefinitions {
+			if value, present := p.Properties[def.ID]; present {
+				text += " " + def.Name + " " + value
+				if def.Type == "checkbox" {
+					if value == "true" {
+						text += " yes"
+					} else if value == "false" {
+						text += " no"
+					}
+				}
+			}
+		}
+		text = strings.ToLower(text)
 		match := true
 		for _, term := range terms {
 			if !strings.Contains(text, term) {

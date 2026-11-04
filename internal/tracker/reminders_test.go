@@ -124,7 +124,7 @@ func TestMigrateVersionTwoPreservesCustomPropertiesAndTheme(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := reopened.Snapshot()
-	if result.Version != 4 || result.Settings.Theme != "dark" || result.Settings.Reminders != DefaultReminders() ||
+	if result.Version != 7 || result.Settings.Theme != "dark" || result.Settings.Reminders != DefaultReminders() ||
 		result.Projects[0].Properties[def.ID] != "Jane" || result.PropertyDefinitions[0].ID != def.ID {
 		t.Fatal("version 2 migration lost existing preferences or properties")
 	}

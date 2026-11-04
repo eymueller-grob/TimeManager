@@ -56,11 +56,11 @@ func TestExportDailyProjectTotals(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := [][]string{
-		{"Date (local)", "Customer", "Project number", "Project / subproject", "Hours"},
-		{"2026-11-03", "=Acme", "100", "Root", "1.00"},
-		{"2026-11-03", "Other", "100", "Root / Child", "1.00"},
-		{"2026-11-04", "=Acme", "100", "Root", "1.00"},
-		{"2026-11-04", "Other", "100", "Root / Child", "3.00"},
+		{"Date (local)", "Customer", "Project number", "Project / subproject", "Hours", "CW"},
+		{"2026-11-03", "=Acme", "100", "Root", "1.00", "CW45"},
+		{"2026-11-03", "Other", "100", "Root / Child", "1.00", "CW45"},
+		{"2026-11-04", "=Acme", "100", "Root", "1.00", "CW45"},
+		{"2026-11-04", "Other", "100", "Root / Child", "3.00", "CW45"},
 		{"", "", "", "Total hours", "6.00"},
 	}
 	if !reflect.DeepEqual(rows, want) {

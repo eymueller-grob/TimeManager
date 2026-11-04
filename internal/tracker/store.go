@@ -33,6 +33,7 @@ type Booking struct {
 	Start     time.Time `json:"start"`
 	End       time.Time `json:"end"`
 	Notes     string    `json:"notes"`
+	Exported  bool      `json:"exported"`
 }
 
 type Timer struct {
@@ -45,6 +46,7 @@ type State struct {
 	Projects            []Project            `json:"projects"`
 	Bookings            []Booking            `json:"bookings"`
 	Active              *Timer               `json:"active"`
+	PausedProjectID     string               `json:"pausedProjectId,omitempty"`
 	Settings            Settings             `json:"settings"`
 	PropertyDefinitions []PropertyDefinition `json:"propertyDefinitions"`
 }
@@ -60,7 +62,7 @@ func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return nil, fmt.Errorf("create data directory: %w", err)
 	}
-	s := &Store{path: path, now: time.Now, data: State{Version: 4, Projects: []Project{}, Bookings: []Booking{}, Settings: DefaultSettings(), PropertyDefinitions: []PropertyDefinition{}}}
+	s := &Store{path: path, now: time.Now, data: State{Version: 7, Projects: []Project{}, Bookings: []Booking{}, Settings: DefaultSettings(), PropertyDefinitions: []PropertyDefinition{}}}
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
@@ -76,7 +78,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("saved data is invalid: %w", err)
 	}
 	s.data = saved
-	if s.data.Version < 4 {
+	if s.data.Version < 7 {
 		if err := s.change(func(d *State) error {
 			if d.Version == 1 {
 				d.Settings = DefaultSettings()
@@ -88,11 +90,19 @@ func Open(path string) (*Store, error) {
 			if d.Version < 3 {
 				d.Settings.Reminders = DefaultReminders()
 			}
-			migrateProjectNames(d)
-			d.Version = 4
+			if d.Version < 4 {
+				migrateProjectNames(d)
+			}
+			if d.Version < 5 {
+				for i := range d.Bookings {
+					d.Bookings[i].Exported = false
+				}
+			}
+			d.Settings.RequireTemporaryProject = false
+			d.Version = 7
 			return nil
 		}); err != nil {
-			return nil, fmt.Errorf("migrate saved data to version 4: %w", err)
+			return nil, fmt.Errorf("migrate saved data to version 7: %w", err)
 		}
 	}
 	if s.data.Projects == nil {
@@ -192,7 +202,7 @@ func project(d State, id string) (Project, bool) {
 }
 
 func validate(d State) error {
-	if d.Version != 1 && d.Version != 2 && d.Version != 3 && d.Version != 4 {
+	if d.Version < 1 || d.Version > 7 {
 		return fmt.Errorf("unsupported data version %d", d.Version)
 	}
 	if d.Version >= 2 {
@@ -277,6 +287,15 @@ func validate(d State) error {
 		if !ok || p.Archived || d.Active.Start.IsZero() {
 			return errors.New("running timer must reference an active project and have a start time")
 		}
+		if d.PausedProjectID != "" {
+			return errors.New("a running timer cannot also be paused")
+		}
+	}
+	if d.PausedProjectID != "" {
+		p, ok := project(d, d.PausedProjectID)
+		if !ok || p.Archived {
+			return errors.New("paused timer must reference an active project")
+		}
 	}
 	return nil
 }
@@ -347,6 +366,9 @@ func (s *Store) DeleteProject(id string) error {
 		if d.Active != nil && d.Active.ProjectID == id {
 			return errors.New("stop this project's timer before deleting or archiving it")
 		}
+		if d.PausedProjectID == id {
+			return errors.New("resume or switch from this project's paused timer before deleting or archiving it")
+		}
 		used := false
 		for _, b := range d.Bookings {
 			if b.ProjectID == id {
@@ -384,8 +406,8 @@ func stop(d *State, now time.Time) error {
 	if d.Active == nil {
 		return nil
 	}
-	if d.Active.ProjectID == temporaryProjectID {
-		return ErrTemporaryAssignment
+	if d.Settings.RequireTemporaryProject && d.Active.ProjectID == temporaryProjectID {
+		return ErrTemporaryProjectRequired
 	}
 	if !now.After(d.Active.Start) {
 		return errors.New("system time is not after the timer start; correct the clock before stopping")
@@ -411,20 +433,64 @@ func (s *Store) StartTimer(id string) error {
 
 const temporaryProjectID = "timemanager-temporary-project"
 
-var ErrTemporaryAssignment = errors.New("assign the temporary timer to a project before ending it")
+var ErrTemporaryProjectRequired = errors.New("select a project before saving temporary time")
+
+func (s *Store) PauseTemporaryTimer(expected Timer, targetID string) error {
+	return s.change(func(d *State) error {
+		if err := assignTemporaryTimer(d, expected, targetID); err != nil {
+			return err
+		}
+		if err := stop(d, s.now()); err != nil {
+			return err
+		}
+		d.PausedProjectID = targetID
+		return nil
+	})
+}
+
+func validateTemporaryTimer(d *State, expected Timer) error {
+	if d.Active == nil || d.Active.ProjectID != temporaryProjectID ||
+		expected.ProjectID != temporaryProjectID || !d.Active.Start.Equal(expected.Start) {
+		return errors.New("temporary timer changed; cancel and try again")
+	}
+	return nil
+}
+
+func (s *Store) DiscardTemporaryTimer(expected Timer) error {
+	return s.change(func(d *State) error {
+		if err := validateTemporaryTimer(d, expected); err != nil {
+			return err
+		}
+		d.Active = nil
+		d.PausedProjectID = ""
+		return nil
+	})
+}
+
+func assignTemporaryTimer(d *State, expected Timer, targetID string) error {
+	if err := validateTemporaryTimer(d, expected); err != nil {
+		return err
+	}
+	target, ok := project(*d, targetID)
+	if !ok || target.Archived || target.ID == temporaryProjectID {
+		return errors.New("choose an active non-temporary project to assign this time")
+	}
+	d.Active.ProjectID = target.ID
+	return nil
+}
+
+func (s *Store) AssignRunningTemporaryTimer(expected Timer, targetID string) error {
+	return s.change(func(d *State) error {
+		return assignTemporaryTimer(d, expected, targetID)
+	})
+}
 
 func (s *Store) FinishTemporaryTimer(expected Timer, targetID, nextID string, favoriteOnly bool) error {
 	return s.change(func(d *State) error {
-		if d.Active == nil || d.Active.ProjectID != temporaryProjectID ||
-			expected.ProjectID != temporaryProjectID || !d.Active.Start.Equal(expected.Start) {
-			return errors.New("temporary timer changed; cancel and try again")
-		}
-		target, ok := project(*d, targetID)
-		if !ok || target.Archived || target.ID == temporaryProjectID {
-			return errors.New("choose an active non-temporary project to assign this time")
+		if err := assignTemporaryTimer(d, expected, targetID); err != nil {
+			return err
 		}
 		now := s.now()
-		d.Active.ProjectID = target.ID
 		if err := stop(d, now); err != nil {
 			return err
 		}
@@ -484,13 +550,48 @@ func changeTimer(d *State, id string, now time.Time, toggle, favoriteOnly bool) 
 		return err
 	}
 	if !same {
+		d.PausedProjectID = ""
 		d.Active = &Timer{ProjectID: id, Start: now}
+	} else {
+		d.PausedProjectID = ""
 	}
 	return nil
 }
 
 func (s *Store) StopTimer() error {
 	return s.change(func(d *State) error { return stop(d, s.now()) })
+}
+
+func (s *Store) PauseTimer() error {
+	return s.change(func(d *State) error {
+		if d.Active == nil {
+			return errors.New("no timer is running")
+		}
+		projectID := d.Active.ProjectID
+		if err := stop(d, s.now()); err != nil {
+			return err
+		}
+		d.PausedProjectID = projectID
+		return nil
+	})
+}
+
+func (s *Store) ResumeTimer() error {
+	return s.change(func(d *State) error {
+		if d.Active != nil {
+			return errors.New("stop the running timer before resuming the paused timer")
+		}
+		if d.PausedProjectID == "" {
+			return errors.New("no timer is paused")
+		}
+		p, ok := project(*d, d.PausedProjectID)
+		if !ok || p.Archived {
+			return errors.New("the paused project's timer cannot be resumed")
+		}
+		d.Active = &Timer{ProjectID: p.ID, Start: s.now()}
+		d.PausedProjectID = ""
+		return nil
+	})
 }
 
 func (s *Store) UpdateTimerStart(expected Timer, start time.Time) error {

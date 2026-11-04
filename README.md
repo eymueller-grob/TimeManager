@@ -22,7 +22,8 @@ Customize its appearance and shared project properties in Settings.
 - **Settings / Appearance:** choose Light, Dark, or Follow Windows/system.
   The preference is saved locally. System mode updates when the operating
   system's color preference changes. Existing installations initially retain
-  the light appearance.
+  the light appearance. Navigation selections use flat backgrounds, and panels,
+  calendars, and dialogs use theme borders without decorative shadows.
 - **Settings / Timer reminders:** independently enable reminders for a running
   timer (default: every 60 minutes) and no running timer (default: every 30
   minutes). Enter positive whole-minute intervals and click Save reminders.
@@ -42,7 +43,9 @@ Customize its appearance and shared project properties in Settings.
   editor. Subprojects have independent values; they do not inherit from their
   parent. Unset fields remain blank in exports; checkbox fields distinguish
   unset, Yes, and No. Numbers must be finite.
-  Rename definitions or edit dropdown options in Settings. Existing field
+  Rename definitions or edit dropdown options in Settings. Use **Move up** and
+  **Move down** to reorder properties; the order is saved immediately and used
+  in project forms, project details, and both Excel sheets. Existing field
   types cannot be changed. Remove or change project values before removing a
   dropdown option they use. Deleting a definition requires confirmation and
   removes its values from all projects, including archived ones.
@@ -50,13 +53,18 @@ Customize its appearance and shared project properties in Settings.
   stops and saves the booking. Clicking a different project atomically saves
   the previous booking and starts the next timer. The start time and elapsed
   time are always shown above the views.
-  The running project has a prominent RUNNING badge and highlighted favorite
+  The running project has a spinning indicator beside its name and in its
+  RUNNING badge (static when reduced motion is requested), plus highlighted favorite
   card and directory row. The timer panel is also emphasized in light and dark
   mode; project colors are retained. Highlights move when switching timers.
   Search favorite projects by number, name, customer, or parent hierarchy.
   Search is case-insensitive; Clear favorite search restores all favorites.
   Filtering only changes the displayed cards, never favorites or the running
   timer. The timer and Stop & save remain available even if its card is hidden.
+  **Pause** saves the current segment and stops elapsed time. **Resume** starts
+  a separate booking segment for the same project, excluding the paused
+  interval. The paused project is remembered across restarts; starting another
+  project clears the paused state.
   **Edit start time** changes the running timer's local start date/time without
   stopping it or changing its project. Earlier and later starts (including
   previous days) are allowed, but future times and overlaps with saved bookings
@@ -72,23 +80,54 @@ Customize its appearance and shared project properties in Settings.
   projects are included, and overnight bookings count only their portion on
   each local day. Running timers are excluded. Switch back to **Booking details**
   to edit individual bookings. This view does not change stored bookings.
+  Each booking has an **Exported** checkbox in its editor; it can be set or
+  cleared manually. Exported bookings are gray but remain editable and count
+  toward totals. A daily project total is gray only when all its contributing
+  bookings are exported; mixed totals retain their project color.
+  Both views display the calendar week as **CW45** beside the date range on
+  the right, without a year prefix or space. Weeks run Monday through Sunday;
+  week 1 contains January 4.
+  Grayed-out buttons and controls show the reason on hover, for example
+  "Bookings cannot be added for future days."
+  All date selectors (calendar navigation, booking start/end, timer start, and
+  Excel date filters) use the shadcn Calendar with a **CW** column on every
+  ISO Monday-to-Sunday row. Click a date field to open its calendar; no
+  separate calendar button is needed. Use arrows to move between dates,
+  Home/End for the row, Page Up/Down for months, and Enter/Space to select.
+  Escape dismisses the picker without closing the surrounding editor. Dates
+  can also be typed as `YYYY-MM-DD`. Booking and timer editors show separate
+  date and time controls (including seconds), rather than a combined timestamp.
+  Selecting a day retains the time; editing time retains the date. Both controls
+  are available without opening the calendar. The selected date's week is shown
+  beside each field.
 - **Temporary tracking:** click **Start temporary timer** in Time & calendar or
   the Windows tray to track time before knowing its final project. This creates
   one reusable **Temporary / Unassigned** project (number `TEMP`, customer
   `Unassigned`) on first use and atomically saves any previous timer. Clicking
   again while temporary tracking is running keeps its original start time.
-  Stopping, switching projects, or quitting requires choosing an active project
-  in **Assign temporary time**. Tray actions restore the app for this prompt.
-  The timer keeps running until confirmation; Cancel keeps tracking without
-  saving or switching. If there are no other projects, cancel and create one
-  first. Assignment and any requested switch are saved atomically; failures
-  leave the timer unchanged and show an error. Saved bookings can still be
-  edited individually later without changing their times or notes.
+  While temporary tracking is running, **Set project** in the timer panel assigns
+  the entire running session to a project without stopping or resetting the
+  timer, and without creating a booking. Cancel leaves it temporary.
+  By default, stopping, pausing, switching projects, or quitting saves temporary
+  time under the temporary project. In **Settings / Temporary timer**, choose
+  **Require a project before saving** to prompt for an active project before
+  any of these actions, including from the tray and project search. Confirming
+  assigns and saves the segment atomically; pausing resumes on the chosen project.
+  Cancel keeps the original timer running. Existing temporary bookings are unchanged.
+  In **Assign temporary time**, **Cancel booking** instead stops and discards
+  the current temporary session without saving it. Existing bookings are kept;
+  pending project switches or quitting are canceled.
+  Allowing temporary bookings also works
+  from the tray and when no other project exists. Saved temporary bookings can
+  be reassigned individually in the booking editor later, retaining their
+  original timestamps and notes. Switching is atomic; save failures leave
+  the timer unchanged and show an error.
   The temporary project can be edited
   in Projects, and later quick-starts reuse it even after renaming. If archived,
   restore it first; if deleted when unused, it is recreated on the next start.
   Existing projects with the default name are not reused or overwritten; a unique
-  numbered name is chosen. No storage format change is required.
+  numbered name is chosen. Temporary timers can also be paused and resumed as
+  separate booking segments.
 - **Archive/delete:** unused projects are permanently deleted; projects with
   bookings are archived and remain available in historical bookings and exports.
   Show archived projects to restore them. Reparent or remove child projects
@@ -108,6 +147,18 @@ Customize its appearance and shared project properties in Settings.
   detailed sheet. It uses the same date filter,
   splits overnight bookings at local midnight (including daylight-saving
   changes), and keeps projects and subprojects separate.
+  Both Excel sheets include **CW** labels after the custom property columns,
+  using ISO week numbering unchanged.
+  Daily totals use the local day's week; detailed bookings show separate start
+  and end weeks using their clipped local timestamps (an end exactly at Monday
+  midnight therefore belongs to the new week).
+  Export options (both off by default) let you **Exclude already exported
+  bookings** from both sheets and **Mark fully included bookings as exported
+  after saving**. Crossing/partially included bookings are not marked.
+  Canceling or failing to save the workbook leaves statuses unchanged. If
+  status saving fails after the Excel file is saved, the error identifies the
+  saved file; no statuses are changed. Bookings edited or deleted during export
+  prevent status marking rather than accidentally marking changed time.
 - **Windows tray:** minimizing hides the window to a project-colored play icon
   while running, or a gray stop-square icon when idle. Hover for the project name
   first, running/stopped state, live elapsed time, and project number. The same
@@ -128,6 +179,10 @@ Customize its appearance and shared project properties in Settings.
   search window without restoring the main app. Search all non-archived projects
   (including non-favorites) by number, name, customer, or parent hierarchy.
   Search ignores capitalization and matches all space-separated words.
+  Directory, favorites, and tray searches also match assigned custom property
+  names and values (text, numbers, dropdown selections, and checkbox values
+  as Yes/No or true/false). Unset properties and parent properties are not
+  inherited into search results. Existing archive and favorite scopes remain unchanged.
   Use arrow keys and Enter, double-click a result, or click Switch project.
   Escape, Cancel, or closing the search window dismisses it without changing
   timers. Selecting the running project leaves its original start unchanged.
@@ -162,15 +217,17 @@ silently reset or overwritten. Exported project/customer details use their
 current values, including later project edits. Custom properties likewise use
 current definitions and values, rather than historical snapshots.
 
-Saved data uses schema version 4. Version 1, 2, and 3 files are validated and atomically
+Saved data uses schema version 7. Version 1 through 6 files are validated and atomically
 migrated on opening, preserving projects, bookings, custom properties, appearance,
-and the original active timer start. Migration adds the default enabled 60/30-minute
+the original active timer start, and exported-booking status. Migration defaults to allowing temporary bookings.
+Migration adds the default enabled 60/30-minute
 reminders for version 1 and 2 files; existing version 3 reminder settings are retained.
-Duplicate project names are automatically given a suffix such as ` (2)`, skipping
+For versions 1-3, duplicate project names are automatically given a suffix such as ` (2)`, skipping
 names already in use; the first occurrence keeps its name. Project IDs, numbers,
 bookings, and active timers remain unchanged. Migration failures leave the original
 file untouched. Keep a backup before upgrading; older versions of the app do not
-support version 4.
+support version 6. Existing version 1-4 bookings migrate with Exported off; their
+timestamps and other metadata are preserved.
 
 ## Prerequisites
 
@@ -248,6 +305,11 @@ does not supply the Go bridge, so use Wails for end-to-end development.
 Run `wails build` from the project root. On Windows, the executable is
 `build/bin/TimeManager.exe`. Build resources under `build/` may be customized;
 generated executables, frontend bundles, and dependencies are ignored by Git.
+
+The app version is defined once as `info.productVersion` in `wails.json`.
+Wails embeds it in the executable's Windows version resource, and Vite injects
+it into the UI, where it appears under **Settings > About**. Update that value
+before building a release.
 
 ## Copilot rules
 

@@ -3,19 +3,29 @@
 import {main} from '../models';
 import {tracker} from '../models';
 
+export function AssignTemporaryTimer(arg1:main.TemporaryAssignment,arg2:string):Promise<void>;
+
 export function DeleteBooking(arg1:string):Promise<void>;
 
 export function DeleteProject(arg1:string):Promise<void>;
 
 export function DeletePropertyDefinition(arg1:string):Promise<void>;
 
-export function ExportBookings(arg1:string,arg2:string):Promise<string>;
+export function DiscardTemporaryTimer(arg1:main.Timer):Promise<void>;
+
+export function ExportBookings(arg1:string,arg2:string,arg3:main.ExportOptions):Promise<string>;
 
 export function GetState():Promise<main.State>;
+
+export function MovePropertyDefinition(arg1:string,arg2:number):Promise<void>;
+
+export function PauseTimer():Promise<void>;
 
 export function QuitApplication():Promise<void>;
 
 export function RestoreProject(arg1:string):Promise<void>;
+
+export function ResumeTimer():Promise<void>;
 
 export function RunInBackground():Promise<void>;
 
@@ -26,6 +36,8 @@ export function SaveProject(arg1:tracker.Project):Promise<void>;
 export function SavePropertyDefinition(arg1:tracker.PropertyDefinition):Promise<void>;
 
 export function SaveSettings(arg1:tracker.Settings):Promise<void>;
+
+export function StartTemporaryTimer():Promise<void>;
 
 export function StopTimer():Promise<void>;
 

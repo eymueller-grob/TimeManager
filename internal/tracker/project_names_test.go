@@ -92,7 +92,7 @@ func TestMigrateDuplicateProjectNames(t *testing.T) {
 				t.Fatal(err)
 			}
 			expected := clone(legacy)
-			expected.Version = 4
+			expected.Version = 7
 			expected.Projects[1].Name = "alpha (4)"
 			expected.Projects[2].Name = "ALPHA (5)"
 			if version == 1 {

@@ -32,6 +32,7 @@ type Booking struct {
 	Start     string `json:"start"`
 	End       string `json:"end"`
 	Notes     string `json:"notes"`
+	Exported  bool   `json:"exported"`
 }
 
 type Timer struct {
@@ -43,6 +44,7 @@ type State struct {
 	Projects            []tracker.Project            `json:"projects"`
 	Bookings            []Booking                    `json:"bookings"`
 	Active              *Timer                       `json:"active"`
+	PausedProjectID     string                       `json:"pausedProjectId"`
 	Settings            tracker.Settings             `json:"settings"`
 	PropertyDefinitions []tracker.PropertyDefinition `json:"propertyDefinitions"`
 }
@@ -117,11 +119,10 @@ func (a *App) QuitApplication() error {
 		return err
 	}
 	if a.store.Snapshot().Active != nil {
-		pending, err := a.timerAction("quit", "")
-		if err != nil {
+		if err := a.timerAction("quit", ""); err != nil {
 			return fmt.Errorf("save timer before quitting: %w", err)
 		}
-		if pending {
+		if a.store.Snapshot().Active != nil {
 			return nil
 		}
 	}
@@ -145,10 +146,10 @@ func (a *App) GetState() (State, error) {
 		return State{}, err
 	}
 	d := a.store.Snapshot()
-	result := State{Projects: d.Projects, Bookings: []Booking{}, Settings: d.Settings, PropertyDefinitions: d.PropertyDefinitions}
+	result := State{Projects: d.Projects, Bookings: []Booking{}, PausedProjectID: d.PausedProjectID, Settings: d.Settings, PropertyDefinitions: d.PropertyDefinitions}
 	for _, b := range d.Bookings {
 		result.Bookings = append(result.Bookings, Booking{ID: b.ID, ProjectID: b.ProjectID,
-			Start: b.Start.Format(time.RFC3339Nano), End: b.End.Format(time.RFC3339Nano), Notes: b.Notes})
+			Start: b.Start.Format(time.RFC3339Nano), End: b.End.Format(time.RFC3339Nano), Notes: b.Notes, Exported: b.Exported})
 	}
 	if d.Active != nil {
 		result.Active = &Timer{ProjectID: d.Active.ProjectID, Start: d.Active.Start.Format(time.RFC3339Nano)}
@@ -168,7 +169,7 @@ func (a *App) changed(f func() error) error {
 }
 
 func (a *App) StartTemporaryTimer() error {
-	return a.changed(func() error { return a.store.StartTemporaryTimer() })
+	return a.timerAction("temporary", "")
 }
 
 func (a *App) SaveProject(p tracker.Project) error {
@@ -197,6 +198,10 @@ func (a *App) DeletePropertyDefinition(id string) error {
 	return a.changed(func() error { return a.store.DeletePropertyDefinition(id) })
 }
 
+func (a *App) MovePropertyDefinition(id string, direction int) error {
+	return a.changed(func() error { return a.store.MovePropertyDefinition(id, direction) })
+}
+
 func (a *App) DeleteProject(id string) error {
 	return a.changed(func() error { return a.store.DeleteProject(id) })
 }
@@ -210,13 +215,19 @@ func (a *App) ToggleFavorite(id string) error {
 }
 
 func (a *App) ToggleTimer(id string) error {
-	_, err := a.timerAction("toggle", id)
-	return err
+	return a.timerAction("toggle", id)
 }
 
 func (a *App) StopTimer() error {
-	_, err := a.timerAction("stop", "")
-	return err
+	return a.timerAction("stop", "")
+}
+
+func (a *App) PauseTimer() error {
+	return a.timerAction("pause", "")
+}
+
+func (a *App) ResumeTimer() error {
+	return a.changed(func() error { return a.store.ResumeTimer() })
 }
 
 type TemporaryAssignment struct {
@@ -225,10 +236,13 @@ type TemporaryAssignment struct {
 	ID     string `json:"id"`
 }
 
-// Timer-ending requests may be deferred until the user assigns temporary time.
-func (a *App) timerAction(action, id string) (bool, error) {
+func (a *App) timerAction(action, id string) error {
 	err := a.changed(func() error {
 		switch action {
+		case "temporary":
+			return a.store.StartTemporaryTimer()
+		case "pause":
+			return a.store.PauseTimer()
 		case "stop", "quit":
 			return a.store.StopTimer()
 		case "toggle":
@@ -241,18 +255,28 @@ func (a *App) timerAction(action, id string) (bool, error) {
 			return errors.New("unknown timer action")
 		}
 	})
-	if !errors.Is(err, tracker.ErrTemporaryAssignment) {
-		return false, err
+	if errors.Is(err, tracker.ErrTemporaryProjectRequired) {
+		d := a.store.Snapshot()
+		if d.Active == nil {
+			return err
+		}
+		a.restoreWindow()
+		runtime.EventsEmit(a.ctx, "temporary-assignment-requested", TemporaryAssignment{
+			Timer: Timer{ProjectID: d.Active.ProjectID, Start: d.Active.Start.Format(time.RFC3339Nano)}, Action: action, ID: id,
+		})
+		return nil
 	}
-	d := a.store.Snapshot()
-	if d.Active == nil {
-		return false, errors.New("timer changed; try again")
+	return err
+}
+
+func (a *App) DiscardTemporaryTimer(expected Timer) error {
+	start, err := time.Parse(time.RFC3339Nano, expected.Start)
+	if err != nil {
+		return fmt.Errorf("invalid original timer start: %w", err)
 	}
-	a.restoreWindow()
-	runtime.EventsEmit(a.ctx, "temporary-assignment-requested", TemporaryAssignment{
-		Timer: Timer{ProjectID: d.Active.ProjectID, Start: d.Active.Start.Format(time.RFC3339Nano)}, Action: action, ID: id,
+	return a.changed(func() error {
+		return a.store.DiscardTemporaryTimer(tracker.Timer{ProjectID: expected.ProjectID, Start: start})
 	})
-	return true, nil
 }
 
 func (a *App) AssignTemporaryTimer(request TemporaryAssignment, targetID string) error {
@@ -262,6 +286,14 @@ func (a *App) AssignTemporaryTimer(request TemporaryAssignment, targetID string)
 	}
 	nextID := ""
 	switch request.Action {
+	case "pause":
+		return a.changed(func() error {
+			return a.store.PauseTemporaryTimer(tracker.Timer{ProjectID: request.Timer.ProjectID, Start: start}, targetID)
+		})
+	case "assign-running":
+		return a.changed(func() error {
+			return a.store.AssignRunningTemporaryTimer(tracker.Timer{ProjectID: request.Timer.ProjectID, Start: start}, targetID)
+		})
 	case "stop", "quit":
 	case "toggle", "favorite", "start":
 		if request.ID != request.Timer.ProjectID {
@@ -308,7 +340,7 @@ func (a *App) SaveBooking(b Booking) error {
 		return fmt.Errorf("invalid booking end: %w", err)
 	}
 	return a.changed(func() error {
-		return a.store.SaveBooking(tracker.Booking{ID: b.ID, ProjectID: b.ProjectID, Start: start, End: end, Notes: b.Notes})
+		return a.store.SaveBooking(tracker.Booking{ID: b.ID, ProjectID: b.ProjectID, Start: start, End: end, Notes: b.Notes, Exported: b.Exported})
 	})
 }
 
@@ -316,11 +348,20 @@ func (a *App) DeleteBooking(id string) error {
 	return a.changed(func() error { return a.store.DeleteBooking(id) })
 }
 
-func (a *App) ExportBookings(from, to string) (string, error) {
+type ExportOptions struct {
+	MarkExported    bool `json:"markExported"`
+	ExcludeExported bool `json:"excludeExported"`
+}
+
+func (a *App) ExportBookings(from, to string, options ExportOptions) (string, error) {
 	if err := a.check(); err != nil {
 		return "", err
 	}
-	data, err := tracker.Export(a.store.Snapshot(), from, to, time.Local)
+	selection, eligible, err := tracker.SelectExportBookings(a.store.Snapshot(), from, to, time.Local, options.ExcludeExported)
+	if err != nil {
+		return "", err
+	}
+	data, err := tracker.Export(selection, from, to, time.Local)
 	if err != nil {
 		return "", err
 	}
@@ -351,6 +392,11 @@ func (a *App) ExportBookings(from, to string) (string, error) {
 	}
 	if err := tracker.WriteAtomic(path, data); err != nil {
 		return "", fmt.Errorf("save Excel export: %w", err)
+	}
+	if options.MarkExported && len(eligible) > 0 {
+		if err := a.changed(func() error { return a.store.MarkBookingsExported(eligible) }); err != nil {
+			return "", fmt.Errorf("Excel file saved to %s, but exported status was not updated: %w", path, err)
+		}
 	}
 	return path, nil
 }

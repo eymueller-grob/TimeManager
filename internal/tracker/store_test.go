@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -126,6 +127,67 @@ func TestTimerSwitchRecoveryAndArchive(t *testing.T) {
 	reopened, err = Open(s.path)
 	if err != nil || len(reopened.Snapshot().Bookings) != 2 || reopened.Snapshot().Projects[0].Archived {
 		t.Fatal("data not persisted")
+	}
+}
+
+func TestPauseAndResumeSaveSeparateBookingSegments(t *testing.T) {
+	s := newStore(t)
+	p := addProject(t, s, "1", "")
+	now := s.now()
+	s.now = func() time.Time { return now }
+	if err := s.StartTimer(p.ID); err != nil {
+		t.Fatal(err)
+	}
+	firstStart := s.Snapshot().Active.Start
+	now = now.Add(30 * time.Minute)
+	if err := s.PauseTimer(); err != nil {
+		t.Fatal(err)
+	}
+	d := s.Snapshot()
+	if d.Active != nil || d.PausedProjectID != p.ID || len(d.Bookings) != 1 ||
+		!d.Bookings[0].Start.Equal(firstStart) || !d.Bookings[0].End.Equal(now) {
+		t.Fatalf("pause did not save the active segment: %#v", d)
+	}
+	reopened, err := Open(s.path)
+	if err != nil || !reflect.DeepEqual(d, reopened.Snapshot()) {
+		t.Fatalf("paused timer was not persisted: %v", err)
+	}
+	if err := s.DeleteProject(p.ID); err == nil {
+		t.Fatal("deleted project with a paused timer")
+	}
+	now = now.Add(20 * time.Minute)
+	if err := s.ResumeTimer(); err != nil {
+		t.Fatal(err)
+	}
+	d = s.Snapshot()
+	if d.PausedProjectID != "" || d.Active == nil || d.Active.ProjectID != p.ID ||
+		!d.Active.Start.Equal(now) || len(d.Bookings) != 1 {
+		t.Fatalf("resume did not begin a new segment: %#v", d)
+	}
+	now = now.Add(10 * time.Minute)
+	if err := s.PauseTimer(); err != nil {
+		t.Fatal(err)
+	}
+	d = s.Snapshot()
+	if len(d.Bookings) != 2 || d.Bookings[1].Start != d.Bookings[0].End.Add(20*time.Minute) ||
+		d.Bookings[1].End.Sub(d.Bookings[1].Start) != 10*time.Minute || d.PausedProjectID != p.ID {
+		t.Fatalf("paused interval was included in booked time: %#v", d)
+	}
+}
+
+func TestPauseTimerFailurePreservesActiveTimer(t *testing.T) {
+	s := newStore(t)
+	p := addProject(t, s, "1", "")
+	if err := s.StartTimer(p.ID); err != nil {
+		t.Fatal(err)
+	}
+	before := s.Snapshot()
+	s.now = func() time.Time { return before.Active.Start }
+	if err := s.PauseTimer(); err == nil {
+		t.Fatal("pause with a non-advancing clock succeeded")
+	}
+	if !reflect.DeepEqual(s.Snapshot(), before) {
+		t.Fatal("failed pause changed timer state")
 	}
 }
 

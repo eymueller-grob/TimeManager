@@ -55,6 +55,7 @@ func Export(d State, from, to string, loc *time.Location) ([]byte, error) {
 	for _, def := range d.PropertyDefinitions {
 		headers = append(headers, "Property: "+def.Name)
 	}
+	headers = append(headers, "Start CW", "End CW")
 	lastColumn, err := excelize.ColumnNumberToName(len(headers))
 	if err != nil {
 		return nil, err
@@ -111,6 +112,7 @@ func Export(d State, from, to string, loc *time.Location) ([]byte, error) {
 			return nil, err
 		}
 		values = append(values, properties...)
+		values = append(values, isoWeekLabel(a.In(loc)), isoWeekLabel(z.In(loc)))
 		if err := f.SetSheetRow(sheet, fmt.Sprintf("A%d", row), &values); err != nil {
 			return nil, err
 		}
@@ -155,10 +157,8 @@ func Export(d State, from, to string, loc *time.Location) ([]byte, error) {
 	if err := f.SetColWidth(sheet, "H", "H", 18); err != nil {
 		return nil, err
 	}
-	if len(d.PropertyDefinitions) > 0 {
-		if err := f.SetColWidth(sheet, "I", lastColumn, 24); err != nil {
-			return nil, err
-		}
+	if err := f.SetColWidth(sheet, "I", lastColumn, 24); err != nil {
+		return nil, err
 	}
 	if err := f.SetPanes(sheet, &excelize.Panes{Freeze: true, YSplit: 1, TopLeftCell: "A2", ActivePane: "bottomLeft"}); err != nil {
 		return nil, err
@@ -191,6 +191,7 @@ func writeDailySummary(f *excelize.File, d State, daily map[dailyProjectKey]time
 	for _, def := range d.PropertyDefinitions {
 		headers = append(headers, "Property: "+def.Name)
 	}
+	headers = append(headers, "CW")
 	lastColumn, err := excelize.ColumnNumberToName(len(headers))
 	if err != nil {
 		return err
@@ -236,6 +237,7 @@ func writeDailySummary(f *excelize.File, d State, daily map[dailyProjectKey]time
 			return err
 		}
 		values = append(values, properties...)
+		values = append(values, isoWeekLabel(date))
 		if err := f.SetSheetRow(sheet, fmt.Sprintf("A%d", i+2), &values); err != nil {
 			return err
 		}
@@ -269,12 +271,15 @@ func writeDailySummary(f *excelize.File, d State, daily map[dailyProjectKey]time
 			return err
 		}
 	}
-	if len(d.PropertyDefinitions) > 0 {
-		if err := f.SetColWidth(sheet, "F", lastColumn, 24); err != nil {
-			return err
-		}
+	if err := f.SetColWidth(sheet, "F", lastColumn, 24); err != nil {
+		return err
 	}
 	return f.SetPanes(sheet, &excelize.Panes{Freeze: true, YSplit: 1, TopLeftCell: "A2", ActivePane: "bottomLeft"})
+}
+
+func isoWeekLabel(date time.Time) string {
+	_, week := date.ISOWeek()
+	return fmt.Sprintf("CW%02d", week)
 }
 
 func exportPropertyValues(definitions []PropertyDefinition, p Project) ([]interface{}, error) {

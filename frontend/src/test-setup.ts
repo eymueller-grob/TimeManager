@@ -11,6 +11,14 @@ Object.defineProperty(window, 'matchMedia', {
   })),
 });
 
+if (!globalThis.ResizeObserver) {
+  globalThis.ResizeObserver = class implements ResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+}
+
 afterEach(cleanup);
 
 if (!HTMLDialogElement.prototype.showModal) {
