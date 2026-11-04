@@ -542,7 +542,7 @@ function App() {
             <header className="page-heading"><h1>{view === 'time' ? 'Time & calendar' : view === 'projects' ? 'Projects' : 'Settings'}</h1>
                 <Button disabledReason={busyReason} onClick={() => {setError(''); setExportOpen(true);}}>Export to Excel</Button></header>
             {!modalOpen && error && <div className="error banner" role="alert">{error}<Button onClick={() => setError('')}>Dismiss</Button></div>}
-            {notice && <div className="success banner" role="status">{notice}</div>}
+            {notice && <div className="success banner" role="status">{notice}<Button onClick={() => setNotice('')}>Dismiss</Button></div>}
             <div className={`timer-dock${active || pausedProject ? ' sticky' : ''}`}><section aria-label="Current timer" className={`timer-panel ${active ? 'running sticky' : pausedProject ? 'paused sticky' : ''}`} style={{borderLeftColor: (activeProject ?? pausedProject)?.color ?? '#cbd5e1'}}>
                 <div><p className="eyebrow">{active ? 'CURRENTLY TRACKING' : pausedProject ? 'TIMER PAUSED' : 'NO TIMER RUNNING'}</p>
                     <h2>{active && <RunningSpinner/>}<ProjectIcon project={activeProject ?? pausedProject}/>{activeProject ? `${activeProject.number} - ${projectPath(projects, activeProject.id)}` : pausedProject ? `${pausedProject.number} - ${projectPath(projects, pausedProject.id)}` : 'Start with a favorite project'}</h2>

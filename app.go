@@ -408,7 +408,10 @@ func (a *App) ExportBookings(from, to string, options ExportOptions) (string, er
 
 func (a *App) restoreWindow() {
 	runtime.WindowShow(a.ctx)
-	runtime.WindowUnminimise(a.ctx)
+	// Unminimise uses SW_RESTORE, which would also shrink a maximized window.
+	if runtime.WindowIsMinimised(a.ctx) {
+		runtime.WindowUnminimise(a.ctx)
+	}
 }
 
 // requestQuitConfirmation shows the window and asks the frontend to confirm quitting.

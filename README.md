@@ -121,6 +121,11 @@ Customize its appearance and shared project properties in Settings.
   week 1 contains January 4.
   Grayed-out buttons and controls show the reason on hover, for example
   "Bookings cannot be added for future days."
+  The layout stays stable: dialogs open at a fixed position near the top and
+  only grow downward, and error or export messages float in the bottom-right
+  corner with a **Dismiss** button instead of pushing the page down. Bringing
+  the window forward (reminders, tray actions, temporary assignment) keeps a
+  maximized window maximized.
   All date selectors (calendar navigation, booking start/end, timer start, and
   Excel date filters) use the shadcn Calendar with a **CW** column on every
   ISO Monday-to-Sunday row, except the booking editor's Start/End, which show
