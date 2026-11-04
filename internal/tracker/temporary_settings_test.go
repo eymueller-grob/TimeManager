@@ -90,7 +90,7 @@ func TestMigrateVersionSixTemporarySettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := reopened.Snapshot()
-	legacy.Version = 7
+	legacy.Version = CurrentVersion
 	if got.Settings.RequireTemporaryProject || !reflect.DeepEqual(got, legacy) {
 		t.Fatal("migration changed existing data or temporary timer behavior")
 	}

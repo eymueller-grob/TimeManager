@@ -1,4 +1,4 @@
-import {act, fireEvent, render, screen, waitFor, within} from '@testing-library/react';
+import {act, cleanup, fireEvent, render, screen, waitFor, within} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {beforeEach, describe, expect, it, vi} from 'vitest';
 import {
@@ -9,6 +9,7 @@ import {
   RestoreProject,
   SaveBooking,
   SaveProject,
+  SaveProjectWithRelated,
   PauseTimer,
   ResumeTimer,
   StopTimer,
@@ -29,6 +30,7 @@ import {
 import {main, tracker} from '../wailsjs/go/models';
 import {EventsOn, WindowSetDarkTheme, WindowSetLightTheme} from '../wailsjs/runtime/runtime';
 import App from './App';
+import {emojiIcon, invertIcon, loadIconImage, renderIconImage, type IconImage} from './projectIcon';
 import wailsConfig from '../../wails.json';
 
 vi.mock('../wailsjs/go/main/App', () => ({
@@ -39,6 +41,7 @@ vi.mock('../wailsjs/go/main/App', () => ({
   RestoreProject: vi.fn(),
   SaveBooking: vi.fn(),
   SaveProject: vi.fn(),
+  SaveProjectWithRelated: vi.fn(),
   PauseTimer: vi.fn(),
   ResumeTimer: vi.fn(),
   StopTimer: vi.fn(),
@@ -62,6 +65,20 @@ vi.mock('../wailsjs/runtime/runtime', () => ({
   WindowSetDarkTheme: vi.fn(),
   WindowSetLightTheme: vi.fn(),
 }));
+
+vi.mock('./projectIcon', async importOriginal => ({
+  ...await importOriginal<typeof import('./projectIcon')>(),
+  emojiIcon: vi.fn(),
+  loadIconImage: vi.fn(),
+  renderIconImage: vi.fn(),
+  invertIcon: vi.fn(),
+}));
+
+const emojiPng = 'data:image/png;base64,ZW1vamk=';
+const uploadPng = 'data:image/png;base64,dXBsb2Fk';
+const cropPng = 'data:image/png;base64,Y3JvcA==';
+const invertedPng = 'data:image/png;base64,aW52ZXJ0';
+const wideImage: IconImage = {image: document.createElement('canvas'), width: 200, height: 100};
 
 const alpha = Object.assign(new tracker.Project(), {
   id: 'alpha',
@@ -151,6 +168,11 @@ describe('TimeManager workspace', () => {
     vi.mocked(StartTemporaryTimer).mockReset().mockResolvedValue();
     vi.mocked(AssignTemporaryTimer).mockReset().mockResolvedValue();
     vi.mocked(DiscardTemporaryTimer).mockReset().mockResolvedValue();
+    vi.mocked(emojiIcon).mockReset().mockReturnValue(emojiPng);
+    vi.mocked(loadIconImage).mockReset().mockResolvedValue(wideImage);
+    vi.mocked(renderIconImage).mockReset().mockImplementation((_source, crop) => crop ? cropPng : uploadPng);
+    vi.mocked(invertIcon).mockReset().mockResolvedValue(invertedPng);
+    vi.mocked(SaveProjectWithRelated).mockReset().mockResolvedValue();
     vi.mocked(WindowSetDarkTheme).mockClear();
     vi.mocked(WindowSetLightTheme).mockClear();
   });
@@ -732,8 +754,10 @@ describe('TimeManager workspace', () => {
     );
     expect(screen.getByLabelText('Add to favorites')).toBeEnabled();
     await user.type(screen.getByLabelText('Project name'), 'Archived copy');
+    // The copy keeps its own color, which differs from the active parent it joins.
+    expect(screen.queryByRole('checkbox', {name: /Apply color and icon to all related projects \(1 project differs/}) !== null).toBe(!archivedParent);
     await user.click(screen.getByRole('button', {name: 'Save project'}));
-    await waitFor(() => expect(SaveProject).toHaveBeenCalledExactlyOnceWith({
+    await waitFor(() => expect(archivedParent ? SaveProject : SaveProjectWithRelated).toHaveBeenCalledExactlyOnceWith({
       ...source, id: '', name: 'Archived copy', archived: false, parentId: archivedParent ? '' : parent.id,
     }));
   });
@@ -760,6 +784,180 @@ describe('TimeManager workspace', () => {
     await user.click(screen.getByRole('button', {name: 'Save project'}));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(SaveProject).toHaveBeenLastCalledWith({...alpha, id: '', name: 'Alpha copy'});
+  });
+
+  it('sets, replaces, and removes project icons and shows them in the UI', async () => {
+    const user = userEvent.setup();
+    await renderLoaded();
+    await user.click(screen.getByRole('button', {name: 'Projects'}));
+    await user.click(screen.getByRole('button', {name: 'Edit'}));
+    expect(screen.getByRole('img', {name: 'No project icon'})).toBeInTheDocument();
+    expect(screen.getByRole('button', {name: 'Use emoji'})).toHaveAttribute('title', 'Enter an emoji or short text first.');
+    expect(screen.getByRole('button', {name: 'Remove icon'})).toHaveAttribute('title', 'This project has no icon.');
+    await user.type(screen.getByLabelText('Project icon (emoji or short text)'), '🚀');
+    await user.click(screen.getByRole('button', {name: 'Use emoji'}));
+    expect(emojiIcon).toHaveBeenCalledWith('🚀', alpha.color);
+    expect(screen.getByRole('img', {name: 'Current project icon'}).querySelector('img')).toHaveAttribute('src', emojiPng);
+    vi.mocked(loadIconImage).mockRejectedValueOnce(new Error('Choose a PNG, JPEG, GIF, WebP, or SVG image.'));
+    const input = screen.getByLabelText('Project icon image file');
+    await user.upload(input, new File(['x'], 'logo.svg', {type: 'image/svg+xml'}));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Choose a PNG, JPEG, GIF, WebP, or SVG image.');
+    expect(screen.getByRole('img', {name: 'Current project icon'}).querySelector('img')).toHaveAttribute('src', emojiPng);
+    const file = new File(['png'], 'logo.png', {type: 'image/png'});
+
+    // Cancelling the crop keeps the previous icon.
+    await user.upload(input, file);
+    expect(loadIconImage).toHaveBeenLastCalledWith(file);
+    const cropper = await screen.findByRole('region', {name: 'Crop image'});
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(within(cropper).getByRole('img', {name: 'Cropped icon preview'})).toHaveAttribute('src', cropPng);
+    expect(renderIconImage).toHaveBeenLastCalledWith(wideImage, {zoom: 1, x: 50, y: 50});
+    expect(screen.getByRole('button', {name: 'Upload image…'})).toHaveAttribute('title', 'Apply or cancel the crop first.');
+    expect(screen.getByRole('button', {name: 'Invert colors'})).toBeDisabled();
+    expect(within(cropper).getByRole('slider', {name: 'Horizontal position'})).not.toHaveAttribute('data-disabled');
+    expect(within(cropper).getByRole('slider', {name: 'Vertical position'})).toHaveAttribute('data-disabled');
+    expect(within(cropper).getByText('Vertical position').closest('label')).toHaveAttribute('title', 'The whole height is already used; zoom in to move vertically.');
+    await user.click(within(cropper).getByRole('button', {name: 'Cancel crop'}));
+    expect(screen.queryByRole('region', {name: 'Crop image'})).not.toBeInTheDocument();
+    expect(screen.getByRole('img', {name: 'Current project icon'}).querySelector('img')).toHaveAttribute('src', emojiPng);
+
+    // Use whole image fits the picture without cropping.
+    await user.upload(input, file);
+    await user.click(await screen.findByRole('button', {name: 'Use whole image'}));
+    expect(renderIconImage).toHaveBeenLastCalledWith(wideImage);
+    expect(screen.queryByRole('region', {name: 'Crop image'})).not.toBeInTheDocument();
+    expect(screen.getByRole('img', {name: 'Current project icon'}).querySelector('img')).toHaveAttribute('src', uploadPng);
+
+    // Zoom and position sliders control the crop.
+    await user.upload(input, file);
+    const zoom = await screen.findByRole('slider', {name: 'Zoom'});
+    act(() => zoom.focus());
+    await user.keyboard('{ArrowRight}{ArrowRight}');
+    expect(screen.getByText('Zoom (120 %)')).toBeInTheDocument();
+    const vertical = screen.getByRole('slider', {name: 'Vertical position'});
+    expect(vertical).not.toHaveAttribute('data-disabled');
+    act(() => vertical.focus());
+    await user.keyboard('{Home}');
+    expect(renderIconImage).toHaveBeenLastCalledWith(wideImage, {zoom: 1.2, x: 50, y: 0});
+    await user.click(screen.getByRole('button', {name: 'Apply crop'}));
+    expect(screen.queryByRole('region', {name: 'Crop image'})).not.toBeInTheDocument();
+    expect(screen.getByRole('img', {name: 'Current project icon'}).querySelector('img')).toHaveAttribute('src', cropPng);
+
+    // Invert works on the current icon.
+    vi.mocked(invertIcon).mockRejectedValueOnce(new Error('The icon could not be read.'));
+    await user.click(screen.getByRole('button', {name: 'Invert colors'}));
+    expect(await screen.findByRole('alert')).toHaveTextContent('The icon could not be read.');
+    expect(screen.getByRole('img', {name: 'Current project icon'}).querySelector('img')).toHaveAttribute('src', cropPng);
+    await user.click(screen.getByRole('button', {name: 'Invert colors'}));
+    expect(invertIcon).toHaveBeenLastCalledWith(cropPng);
+    await waitFor(() => expect(screen.getByRole('img', {name: 'Current project icon'}).querySelector('img')).toHaveAttribute('src', invertedPng));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    vi.mocked(GetState).mockResolvedValue(state({projects: [{...alpha, icon: uploadPng}]}));
+    await user.click(screen.getByRole('button', {name: 'Save project'}));
+    await waitFor(() => expect(SaveProject).toHaveBeenCalledExactlyOnceWith({...alpha, icon: invertedPng}));
+    expect(SaveProjectWithRelated).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await waitFor(() => expect(document.querySelector(`.directory-row img.project-icon[src="${uploadPng}"]`)).toBeInTheDocument());
+    await user.click(screen.getByRole('button', {name: 'Edit'}));
+    await user.click(screen.getByRole('button', {name: 'Remove icon'}));
+    expect(screen.getByRole('img', {name: 'No project icon'})).toBeInTheDocument();
+    await user.click(screen.getByRole('button', {name: 'Save project'}));
+    await waitFor(() => expect(SaveProject).toHaveBeenLastCalledWith({...alpha, icon: undefined}));
+  });
+
+  it('keeps a running or paused timer sticky and shows a compact page heading', async () => {
+    await renderLoaded(state());
+    expect(screen.queryByText('YOUR WORKSPACE')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Pick a project\. Start focusing\./)).not.toBeInTheDocument();
+    expect(screen.getByRole('region', {name: 'Current timer'})).not.toHaveClass('sticky');
+    cleanup();
+
+    await renderLoaded(state({active: Object.assign(new main.Timer(), {projectId: alpha.id, start: new Date().toISOString()})}));
+    expect(screen.getByRole('region', {name: 'Current timer'})).toHaveClass('sticky', 'running');
+    cleanup();
+
+    await renderLoaded(state({pausedProjectId: alpha.id}));
+    expect(screen.getByRole('region', {name: 'Current timer'})).toHaveClass('sticky', 'paused');
+  });
+
+  it('shows the running project icon on favorites and in the timer panel', async () => {
+    await renderLoaded(state({
+      projects: [{...alpha, icon: emojiPng}],
+      active: Object.assign(new main.Timer(), {projectId: alpha.id, start: new Date().toISOString()}),
+    }));
+    expect(document.querySelector(`.timer-panel h2 img.project-icon[src="${emojiPng}"]`)).toBeInTheDocument();
+    expect(document.querySelector(`.favorite-card img.project-icon[src="${emojiPng}"]`)).toBeInTheDocument();
+    expect(document.querySelector(`.sidebar-bottom img.project-icon[src="${emojiPng}"]`)).toBeInTheDocument();
+  });
+
+  it('offers already used icons, including archived projects, for reuse', async () => {
+    const user = userEvent.setup();
+    const beta = {...alpha, id: 'beta', number: '200', name: 'Beta', icon: emojiPng, favorite: false};
+    const gamma = {...alpha, id: 'gamma', number: '300', name: 'Gamma', icon: emojiPng, favorite: false};
+    const old = {...alpha, id: 'old', number: '400', name: 'Old', icon: uploadPng, archived: true, favorite: false};
+    await renderLoaded(state({projects: [alpha, beta, gamma, old]}));
+    await user.click(screen.getByRole('button', {name: 'Projects'}));
+    await user.click(screen.getByRole('button', {name: 'Create project'}));
+    const used = within(screen.getByRole('group', {name: 'Already used icons'}));
+    const buttons = used.getAllByRole('button');
+    expect(buttons.map(b => b.getAttribute('aria-label'))).toEqual(['Use icon of Beta, Gamma', 'Use icon of Old']);
+    expect(buttons.every(b => b.getAttribute('aria-pressed') === 'false')).toBe(true);
+
+    await user.click(used.getByRole('button', {name: 'Use icon of Old'}));
+    expect(screen.getByRole('img', {name: 'Current project icon'}).querySelector('img')).toHaveAttribute('src', uploadPng);
+    expect(used.getByRole('button', {name: 'Use icon of Old'})).toHaveAttribute('aria-pressed', 'true');
+    await user.type(screen.getByLabelText('Project number'), '500');
+    await user.type(screen.getByLabelText('Customer'), 'Acme');
+    await user.type(screen.getByLabelText('Project name'), 'Reuse');
+    await user.click(screen.getByRole('button', {name: 'Save project'}));
+    await waitFor(() => expect(SaveProject).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({name: 'Reuse', icon: uploadPng})));
+  });
+
+  it('hides already used icons when no project has an icon', async () => {
+    const user = userEvent.setup();
+    await renderLoaded(state({projects: [alpha]}));
+    await user.click(screen.getByRole('button', {name: 'Projects'}));
+    await user.click(screen.getByRole('button', {name: 'Edit'}));
+    expect(screen.queryByRole('group', {name: 'Already used icons'})).not.toBeInTheDocument();
+  });
+
+  it('offers to apply color and icon to related projects and lets new subprojects inherit them', async () => {
+    const user = userEvent.setup();
+    const child = {...alpha, id: 'child', number: '101', name: 'Child', parentId: alpha.id, color: '#00ff00', favorite: false};
+    const grandchild = {...alpha, id: 'grandchild', number: '102', name: 'Grandchild', parentId: child.id, icon: emojiPng, favorite: false};
+    const other = {...alpha, id: 'other', number: '200', name: 'Other', color: '#123456', favorite: false};
+    await renderLoaded(state({projects: [alpha, child, grandchild, other]}));
+    await user.click(screen.getByRole('button', {name: 'Projects'}));
+    const row = (name: string) => screen.getByRole('button', {name: new RegExp(`^(Add|Remove) favorite \\d+ ${name}$`)}).closest('.directory-row') as HTMLElement;
+
+    // Editing the leaf finds its parent and grandparent; the other tree is ignored.
+    await user.click(within(row('Grandchild')).getByRole('button', {name: 'Edit'}));
+    const apply = screen.getByRole('checkbox', {name: /Apply color and icon to all related projects \(2 projects differ/});
+    expect(apply).toBeChecked();
+    expect(apply.closest('label')).toHaveAttribute('title', 'Related projects with a different color or icon: Alpha, Child');
+    await user.click(screen.getByRole('button', {name: 'Save project'}));
+    await waitFor(() => expect(SaveProjectWithRelated).toHaveBeenCalledExactlyOnceWith(grandchild));
+    expect(SaveProject).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    // Unchecking saves only this project.
+    await user.click(within(row('Alpha')).getByRole('button', {name: 'Edit'}));
+    await user.click(screen.getByRole('checkbox', {name: /Apply color and icon to all related projects \(2 projects differ/}));
+    await user.click(screen.getByRole('button', {name: 'Save project'}));
+    await waitFor(() => expect(SaveProject).toHaveBeenCalledExactlyOnceWith(alpha));
+    expect(SaveProjectWithRelated).toHaveBeenCalledOnce();
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    // No checkbox when all relatives already match or there are none.
+    await user.click(within(row('Other')).getByRole('button', {name: 'Edit'}));
+    expect(screen.queryByRole('checkbox', {name: /Apply color and icon/})).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', {name: 'Cancel'}));
+
+    // A new subproject inherits its parent's color and icon; only relatives that differ are counted.
+    await user.click(within(row('Grandchild')).getByRole('button', {name: 'Add subproject'}));
+    expect(screen.getByRole('img', {name: 'Current project icon'}).querySelector('img')).toHaveAttribute('src', emojiPng);
+    expect(screen.getByLabelText('Project color')).toHaveValue(grandchild.color);
+    expect(screen.getByRole('checkbox', {name: /\(2 projects differ/})).toBeChecked();
   });
 
   it('toggles a favorite, archives a booked project, and restores archived projects', async () => {
@@ -866,11 +1064,11 @@ describe('TimeManager workspace', () => {
     const entries = within(list).getAllByRole('listitem');
     expect(entries).toHaveLength(3);
     expect(entries[0]).toHaveTextContent('100 - Alpha');
-    expect(entries[0]).toHaveTextContent('02:30:00');
+    expect(entries[0]).toHaveTextContent('2.50 h');
     expect(entries[1]).toHaveTextContent('101 - Child');
-    expect(entries[1]).toHaveTextContent('00:45:00');
+    expect(entries[1]).toHaveTextContent('0.75 h');
     expect(entries[2]).toHaveTextContent('200 - Archived project');
-    expect(entries[2]).toHaveTextContent('00:15:00');
+    expect(entries[2]).toHaveTextContent('0.25 h');
     expect(within(list).queryByRole('button')).not.toBeInTheDocument();
     expect(screen.queryByText('Detailed note')).not.toBeInTheDocument();
     expect(SaveBooking).not.toHaveBeenCalled();
@@ -888,14 +1086,14 @@ describe('TimeManager workspace', () => {
     await renderLoaded(state({bookings}));
     fireEvent.change(screen.getByLabelText('Week of'), {target: {value: '2026-10-26'}});
     await user.selectOptions(screen.getByLabelText('Calendar view'), 'summary');
-    expect(screen.getByRole('list', {name: 'Project totals 2026-10-26'})).toHaveTextContent('00:30:00');
-    expect(screen.getByRole('list', {name: 'Project totals 2026-10-27'})).toHaveTextContent('02:15:00');
+    expect(screen.getByRole('list', {name: 'Project totals 2026-10-26'})).toHaveTextContent('0.50 h');
+    expect(screen.getByRole('list', {name: 'Project totals 2026-10-27'})).toHaveTextContent('2.25 h');
     expect(screen.queryByRole('list', {name: 'Project totals 2026-10-28'})).not.toBeInTheDocument();
     expect(within(screen.getByRole('region', {name: '2026-10-28'})).getByText('No bookings')).toBeInTheDocument();
     await user.click(screen.getByRole('button', {name: 'Next week'}));
     expect(screen.queryByRole('list', {name: /^Project totals/})).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', {name: 'Previous week'}));
-    expect(screen.getByRole('list', {name: 'Project totals 2026-10-26'})).toHaveTextContent('00:30:00');
+    expect(screen.getByRole('list', {name: 'Project totals 2026-10-26'})).toHaveTextContent('0.50 h');
   });
 
   it('excludes the running timer from summary entries while retaining stop controls', async () => {
@@ -975,6 +1173,45 @@ describe('TimeManager workspace', () => {
     expect(Number.isNaN(Date.parse(saved.end))).toBe(false);
   });
 
+  it('shows the project properties read-only and no calendar weeks in the booking editor', async () => {
+    const user = userEvent.setup();
+    const definitions = [
+      {id: 'contact', name: 'Contact', type: 'text', options: []},
+      {id: 'rate', name: 'Rate', type: 'number', options: []},
+      {id: 'billable', name: 'Billable', type: 'checkbox', options: []},
+      {id: 'teams', name: 'Teams', type: 'multiselect', options: ['Dev', 'QA']},
+    ];
+    const withProperties = {...alpha, properties: {contact: 'Jane', billable: 'true', teams: '["Dev","QA"]'}};
+    const beta = {...alpha, id: 'beta', number: '101', name: 'Beta', properties: {contact: 'Bob'}};
+    await renderLoaded(state({projects: [withProperties, beta], bookings: [existingBooking], propertyDefinitions: definitions}));
+
+    await user.click(await screen.findByRole('button', {name: /Existing note/}));
+    const dialog = screen.getByRole('dialog', {name: 'Edit booking'});
+    const properties = within(dialog).getByRole('region', {name: 'Project properties'});
+    expect(within(properties).getByLabelText('Contact')).toHaveValue('Jane');
+    expect(within(properties).getByLabelText('Contact')).toHaveAttribute('readonly');
+    expect(within(properties).getByLabelText('Rate')).toHaveValue('');
+    expect(within(properties).getByLabelText('Rate')).toHaveAttribute('placeholder', 'Not set');
+    expect(within(properties).getByLabelText('Teams')).toHaveValue('Dev, QA');
+    const billable = within(properties).getByRole('checkbox', {name: 'Billable'});
+    expect(billable).toBeChecked();
+    expect(billable).toBeDisabled();
+    await user.type(within(properties).getByLabelText('Contact'), 'X');
+    expect(within(properties).getByLabelText('Contact')).toHaveValue('Jane');
+    expect(within(dialog).queryByText(/^CW\d/)).not.toBeInTheDocument();
+    await user.click(within(dialog).getByLabelText('Start'));
+    const startCalendar = await screen.findByRole('region', {name: 'Start calendar'});
+    expect(within(startCalendar).queryByText(/^CW/)).not.toBeInTheDocument();
+    await user.keyboard('{Escape}');
+
+    await selectProject(user, 'Project', /101 - Beta/);
+    expect(within(properties).getByLabelText('Contact')).toHaveValue('Bob');
+    expect(within(properties).getByRole('checkbox', {name: /Billable \(not set\)/})).not.toBeChecked();
+    await user.click(within(dialog).getByRole('button', {name: 'Save booking'}));
+    expect(SaveBooking).toHaveBeenCalledWith(expect.objectContaining({projectId: 'beta'}));
+    expect(vi.mocked(SaveBooking).mock.calls[0][0]).not.toHaveProperty('properties');
+  });
+
   it('deletes an existing booking only after confirmation', async () => {
     const user = userEvent.setup();
     await renderLoaded(state({bookings: [existingBooking]}));
@@ -986,6 +1223,36 @@ describe('TimeManager workspace', () => {
     await user.click(within(confirmation).getByRole('button', {name: 'Confirm'}));
 
     expect(DeleteBooking).toHaveBeenCalledWith(existingBooking.id);
+  });
+
+  it('deletes a booking from its trash can button after confirmation', async () => {
+    const user = userEvent.setup();
+    await renderLoaded(state({bookings: [existingBooking]}));
+
+    const trash = await screen.findByRole('button', {name: /^Delete booking .* Alpha$/});
+    expect(trash).toHaveAttribute('title', 'Delete booking');
+    await user.click(trash);
+    expect(screen.queryByRole('dialog', {name: 'Edit booking'})).not.toBeInTheDocument();
+    const confirmation = screen.getByRole('dialog', {name: 'Delete booking?'});
+    expect(confirmation).toHaveTextContent(/The booking for Alpha \(.+\) will be permanently deleted\./);
+
+    await user.click(within(confirmation).getByRole('button', {name: 'Cancel'}));
+    expect(DeleteBooking).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', {name: /^Delete booking .* Alpha$/}));
+    await user.click(within(screen.getByRole('dialog', {name: 'Delete booking?'})).getByRole('button', {name: 'Confirm'}));
+    await waitFor(() => expect(DeleteBooking).toHaveBeenCalledExactlyOnceWith(existingBooking.id));
+  });
+
+  it('reports a failed delete from the trash can and keeps the confirmation open', async () => {
+    const user = userEvent.setup();
+    vi.mocked(DeleteBooking).mockRejectedValueOnce(new Error('booking not found'));
+    await renderLoaded(state({bookings: [existingBooking]}));
+
+    await user.click(await screen.findByRole('button', {name: /^Delete booking .* Alpha$/}));
+    const confirmation = screen.getByRole('dialog', {name: 'Delete booking?'});
+    await user.click(within(confirmation).getByRole('button', {name: 'Confirm'}));
+    expect(await within(confirmation).findByRole('alert')).toHaveTextContent('booking not found');
   });
 
   it('exports a date range and announces the saved file', async () => {
@@ -1057,18 +1324,46 @@ describe('TimeManager workspace', () => {
       {id: 'rate', name: 'Rate', type: 'number', options: []},
       {id: 'billable', name: 'Billable', type: 'checkbox', options: []},
       {id: 'status', name: 'Status', type: 'dropdown', options: ['Open', 'Closed']},
+      {id: 'teams', name: 'Teams', type: 'multiselect', options: ['Dev', 'QA', 'Ops']},
     ];
     await renderLoaded(state({propertyDefinitions: definitions}));
     await user.click(screen.getByRole('button', {name: 'Projects'}));
     await user.click(screen.getByRole('button', {name: 'Edit'}));
     await user.type(screen.getByLabelText('Contact'), 'Jane');
     await user.type(screen.getByLabelText('Rate'), '125.5');
-    await user.selectOptions(screen.getByLabelText('Billable'), 'false');
+    const billable = screen.getByRole('checkbox', {name: 'Billable'});
+    expect(billable).not.toBeChecked();
+    await user.click(billable);
+    expect(billable).toBeChecked();
+    await user.click(billable);
     await user.selectOptions(screen.getByLabelText('Status'), 'Open');
+    await user.click(screen.getByRole('button', {name: 'Teams: Not set'}));
+    const teams = await screen.findByRole('group', {name: 'Teams options'});
+    await user.click(within(teams).getByRole('checkbox', {name: 'QA'}));
+    await user.click(within(teams).getByRole('checkbox', {name: 'Dev'}));
+    expect(screen.getByRole('button', {name: 'Teams: Dev, QA'})).toBeInTheDocument();
+    await user.keyboard('{Escape}');
     await user.click(screen.getByRole('button', {name: 'Save project'}));
     expect(SaveProject).toHaveBeenCalledWith(expect.objectContaining({
-      properties: {contact: 'Jane', rate: '125.5', billable: 'false', status: 'Open'},
+      properties: {contact: 'Jane', rate: '125.5', billable: 'false', status: 'Open', teams: '["Dev","QA"]'},
     }));
+  });
+
+  it('shows and clears multiselect project values', async () => {
+    const user = userEvent.setup();
+    const definitions = [{id: 'teams', name: 'Teams', type: 'multiselect', options: ['Dev', 'QA']}];
+    const s = state({propertyDefinitions: definitions});
+    s.projects[0].properties = {teams: '["Dev","QA"]'};
+    await renderLoaded(s);
+    await user.click(screen.getByRole('button', {name: 'Projects'}));
+    expect(screen.getByText('Teams: Dev, QA')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', {name: 'Edit'}));
+    await user.click(screen.getByRole('button', {name: 'Teams: Dev, QA'}));
+    await user.click(await screen.findByRole('button', {name: 'Clear selection'}));
+    expect(screen.getByRole('button', {name: 'Teams: Not set'})).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    await user.click(screen.getByRole('button', {name: 'Save project'}));
+    expect(SaveProject).toHaveBeenCalledWith(expect.objectContaining({properties: {}}));
   });
 
   it('follows system theme changes and cleans up its listener', async () => {

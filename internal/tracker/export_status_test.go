@@ -166,7 +166,7 @@ func TestMigrateExportedStatusFromVersionFour(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy.Version = 7
+	legacy.Version = CurrentVersion
 	if !reflect.DeepEqual(reopened.Snapshot(), legacy) {
 		t.Fatal("migration lost booking data")
 	}
@@ -216,7 +216,7 @@ func TestMigrateVersionFivePreservesExportStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := reopened.Snapshot()
-	if got.Version != 7 || got.PausedProjectID != "" || !got.Bookings[0].Exported {
+	if got.Version != CurrentVersion || got.PausedProjectID != "" || !got.Bookings[0].Exported {
 		t.Fatalf("migration lost version 5 data: %#v", got)
 	}
 }

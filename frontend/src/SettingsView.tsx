@@ -54,7 +54,7 @@ function PropertyEditor({initial, busy, save, close}: {
     const [options, setOptions] = useState(initial.options.join('\n'));
     const submit = (e: FormEvent) => {
         e.preventDefault();
-        void save({id: initial.id, name, type, options: type === 'dropdown' ? options.split('\n') : []}, close);
+        void save({id: initial.id, name, type, options: type === 'dropdown' || type === 'multiselect' ? options.split('\n') : []}, close);
     };
     return <form className="property-editor" onSubmit={submit}><fieldset disabled={busy}>
         <h3>{initial.id ? 'Edit property' : 'New property'}</h3>
@@ -63,9 +63,10 @@ function PropertyEditor({initial, busy, save, close}: {
             <Label title={initial.id ? 'Existing property types cannot be changed.' : undefined}>Property type<NativeSelect value={type} disabled={!!initial.id} onChange={e => setType(e.target.value)}>
                 <NativeSelectOption value="text">Text</NativeSelectOption><NativeSelectOption value="number">Number</NativeSelectOption>
                 <NativeSelectOption value="checkbox">Checkbox</NativeSelectOption><NativeSelectOption value="dropdown">Dropdown</NativeSelectOption>
+                <NativeSelectOption value="multiselect">Dropdown (multiple selection)</NativeSelectOption>
             </NativeSelect></Label>
         </div>
-        {type === 'dropdown' && <Label>Dropdown options (one per line)<Textarea required rows={4} value={options} onChange={e => setOptions(e.target.value)}/></Label>}
+        {(type === 'dropdown' || type === 'multiselect') && <Label>Dropdown options (one per line)<Textarea required rows={4} value={options} onChange={e => setOptions(e.target.value)}/></Label>}
         <p className="hint">Existing property types cannot be changed. Dropdown options used by projects must be cleared or changed on those projects before removing the option.</p>
         <div className="dialog-actions"><Button type="button" onClick={close}>Cancel</Button><Button className="primary">Save property</Button></div>
     </fieldset></form>;

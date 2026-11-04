@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/binary"
+	"image"
 	"image/color"
 	"image/png"
 	"reflect"
@@ -10,6 +12,7 @@ import (
 	"testing"
 	"time"
 	"unicode/utf16"
+	"unsafe"
 
 	"TimeManager/internal/tracker"
 )
@@ -119,71 +122,6 @@ func TestTrayProjectGroups(t *testing.T) {
 	}
 }
 
-func TestTrayIcon(t *testing.T) {
-	icon, err := trayIcon("#123456", true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(icon) <= 22 || binary.LittleEndian.Uint16(icon[2:4]) != 1 || binary.LittleEndian.Uint16(icon[4:6]) != 1 {
-		t.Fatalf("invalid ICO header: %v", icon[:min(len(icon), 22)])
-	}
-	if got := binary.LittleEndian.Uint32(icon[18:22]); got != 22 {
-		t.Fatalf("PNG payload offset = %d, want 22", got)
-	}
-	img, err := png.Decode(bytes.NewReader(icon[22:]))
-	if err != nil {
-		t.Fatalf("decode tray PNG: %v", err)
-	}
-	if img.Bounds().Dx() != 32 || img.Bounds().Dy() != 32 {
-		t.Fatalf("tray image dimensions = %v", img.Bounds())
-	}
-	if got := color.NRGBAModel.Convert(img.At(16, 24)).(color.NRGBA); got != (color.NRGBA{R: 0x12, G: 0x34, B: 0x56, A: 0xff}) {
-		t.Fatalf("background pixel color = %#v", got)
-	}
-	if got := color.NRGBAModel.Convert(img.At(16, 16)).(color.NRGBA); got != (color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}) {
-		t.Fatalf("play pixel color = %#v", got)
-	}
-}
-
-func TestTrayIconRejectsInvalidColors(t *testing.T) {
-	for _, value := range []string{"", "#fff", "123456", "#12zz56"} {
-		t.Run(value, func(t *testing.T) {
-			if _, err := trayIcon(value, true); err == nil {
-				t.Fatalf("trayIcon(%q) unexpectedly succeeded", value)
-			}
-		})
-	}
-}
-
-func TestTrayIconStateAndContrast(t *testing.T) {
-	for _, hex := range []string{"#123456", "#ffffff"} {
-		for _, running := range []bool{false, true} {
-			icon, err := trayIcon(hex, running)
-			if err != nil {
-				t.Fatal(err)
-			}
-			img, err := png.Decode(bytes.NewReader(icon[22:]))
-			if err != nil {
-				t.Fatal(err)
-			}
-			symbol := color.NRGBA{255, 255, 255, 255}
-			if hex == "#ffffff" {
-				symbol = color.NRGBA{0, 0, 0, 255}
-			}
-			if got := color.NRGBAModel.Convert(img.At(16, 16)); got != symbol {
-				t.Fatalf("symbol contrast: %s running=%v: %v", hex, running, got)
-			}
-			isSymbol := color.NRGBAModel.Convert(img.At(21, 11)) == symbol
-			if isSymbol == running {
-				t.Fatalf("play and stop silhouettes not distinct: %s running=%v", hex, running)
-			}
-			if _, _, _, alpha := img.At(0, 0).RGBA(); alpha != 0 {
-				t.Fatal("icon corner must remain transparent")
-			}
-		}
-	}
-}
-
 func TestTrayStatus(t *testing.T) {
 	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
 	d := tracker.State{Projects: []tracker.Project{{ID: "p", Name: "R&D", Number: "100", Color: "#64748b"}}}
@@ -234,5 +172,194 @@ func TestTooltipBoundsUTF16Length(t *testing.T) {
 				t.Fatalf("tooltip = %q, want %q", got, tt.text)
 			}
 		})
+	}
+}
+
+func testProjectIcon(t *testing.T, width, height int, fill color.NRGBA) string {
+	t.Helper()
+	img := image.NewNRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.SetNRGBA(x, y, fill)
+		}
+	}
+	var b bytes.Buffer
+	if err := png.Encode(&b, img); err != nil {
+		t.Fatal(err)
+	}
+	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(b.Bytes())
+}
+
+func TestTrayStatusIcon(t *testing.T) {
+	d := tracker.State{Projects: []tracker.Project{{ID: "a", Icon: "icon-a"}, {ID: "b"}}}
+	if got := trayStatusIcon(d); got != "" {
+		t.Fatalf("idle icon = %q", got)
+	}
+	d.Active = &tracker.Timer{ProjectID: "a"}
+	if got := trayStatusIcon(d); got != "icon-a" {
+		t.Fatalf("running icon = %q", got)
+	}
+	d.Active = nil
+	d.PausedProjectID = "a"
+	if got := trayStatusIcon(d); got != "icon-a" {
+		t.Fatalf("paused icon = %q", got)
+	}
+	d.PausedProjectID = "b"
+	if got := trayStatusIcon(d); got != "" {
+		t.Fatalf("project without icon = %q", got)
+	}
+}
+
+func decodeTrayICO(t *testing.T, icon []byte) image.Image {
+	t.Helper()
+	if len(icon) <= 22 || binary.LittleEndian.Uint16(icon[2:4]) != 1 || binary.LittleEndian.Uint16(icon[4:6]) != 1 {
+		t.Fatalf("invalid ICO header: %v", icon[:min(len(icon), 22)])
+	}
+	if got := binary.LittleEndian.Uint32(icon[18:22]); got != 22 {
+		t.Fatalf("PNG payload offset = %d, want 22", got)
+	}
+	img, err := png.Decode(bytes.NewReader(icon[22:]))
+	if err != nil {
+		t.Fatalf("decode tray PNG: %v", err)
+	}
+	if img.Bounds().Dx() != 32 || img.Bounds().Dy() != 32 {
+		t.Fatalf("tray image dimensions = %v", img.Bounds())
+	}
+	return img
+}
+
+func nrgbaAt(img image.Image, x, y int) color.NRGBA {
+	return color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
+}
+
+func TestTrayProjectMark(t *testing.T) {
+	blue := color.NRGBA{R: 0x12, G: 0x34, B: 0x56, A: 0xff}
+	red := color.NRGBA{R: 220, G: 20, B: 60, A: 255}
+	plain := decodeTrayICO(t, must(t)(trayProjectMark("#123456", "")))
+	for _, p := range []image.Point{{16, 16}, {1, 16}, {30, 16}, {16, 1}, {16, 30}} {
+		if got := nrgbaAt(plain, p.X, p.Y); got != blue {
+			t.Fatalf("color circle at %v = %v, want full-size %v", p, got, blue)
+		}
+	}
+	if got := nrgbaAt(plain, 0, 0); got.A != 0 {
+		t.Fatal("circle corner must remain transparent")
+	}
+	for _, test := range []struct {
+		name          string
+		width, height int
+		filled        image.Point
+		transparent   image.Point
+	}{
+		{name: "square fills slot", width: 64, height: 64, filled: image.Pt(31, 31)},
+		{name: "wide keeps aspect", width: 128, height: 32, filled: image.Pt(1, 14), transparent: image.Pt(1, 1)},
+		{name: "small upscales", width: 8, height: 8, filled: image.Pt(0, 0)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			img := decodeTrayICO(t, must(t)(trayProjectMark("#123456", testProjectIcon(t, test.width, test.height, red))))
+			if got := nrgbaAt(img, test.filled.X, test.filled.Y); got != red {
+				t.Fatalf("project icon pixel = %v", got)
+			}
+			if got := nrgbaAt(img, 16, 16); got != red {
+				t.Fatalf("project icon must not have a status badge, center = %v", got)
+			}
+			if test.transparent != (image.Point{}) && nrgbaAt(img, test.transparent.X, test.transparent.Y).A != 0 {
+				t.Fatal("letterbox area must remain transparent")
+			}
+		})
+	}
+	for _, test := range []struct{ name, hex, icon string }{
+		{"empty color", "", ""},
+		{"short color", "#fff", ""},
+		{"missing hash", "123456", ""},
+		{"invalid hex", "#12zz56", ""},
+		{"invalid color with icon", "#12345", testProjectIcon(t, 4, 4, red)},
+		{"invalid icon", "#123456", "data:image/png;base64,AAAA"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := trayProjectMark(test.hex, test.icon); err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}
+
+func must(t *testing.T) func([]byte, error) []byte {
+	return func(b []byte, err error) []byte {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+}
+
+func TestTrayBlankIcon(t *testing.T) {
+	img := decodeTrayICO(t, must(t)(trayBlankIcon()))
+	for _, p := range []image.Point{{0, 0}, {16, 16}, {31, 31}} {
+		if nrgbaAt(img, p.X, p.Y).A != 0 {
+			t.Fatalf("blank icon pixel %v must be transparent", p)
+		}
+	}
+}
+
+func TestTrayStateIcon(t *testing.T) {
+	for _, test := range []struct {
+		state  trayState
+		symbol color.NRGBA
+		filled []image.Point
+		empty  []image.Point
+	}{
+		// Large play triangle: wide base on the left, tapering to the tip.
+		{trayRunning, color.NRGBA{0x16, 0xa3, 0x4a, 0xff},
+			[]image.Point{{4, 3}, {4, 28}, {16, 16}, {28, 15}},
+			[]image.Point{{0, 0}, {1, 16}, {20, 5}, {31, 16}}},
+		// Two tall bars with a gap between them.
+		{trayPaused, color.NRGBA{0xd9, 0x77, 0x06, 0xff},
+			[]image.Point{{4, 2}, {12, 29}, {19, 2}, {27, 29}},
+			[]image.Point{{0, 0}, {16, 16}, {1, 16}, {30, 16}}},
+		// Large square.
+		{trayStopped, color.NRGBA{0x64, 0x74, 0x8b, 0xff},
+			[]image.Point{{3, 3}, {28, 28}, {16, 16}, {28, 3}},
+			[]image.Point{{0, 0}, {1, 16}, {30, 16}, {16, 30}}},
+	} {
+		img := decodeTrayICO(t, must(t)(trayStateIcon(test.state)))
+		for _, p := range test.filled {
+			if got := nrgbaAt(img, p.X, p.Y); got != test.symbol {
+				t.Fatalf("state %d pixel %v = %v, want symbol %v", test.state, p, got, test.symbol)
+			}
+		}
+		for _, p := range test.empty {
+			if got := nrgbaAt(img, p.X, p.Y); got.A != 0 {
+				t.Fatalf("state %d pixel %v = %v, want transparent (no circle)", test.state, p, got)
+			}
+		}
+	}
+	if _, err := trayStateIcon(trayState(99)); err == nil {
+		t.Fatal("unknown state must be rejected")
+	}
+}
+
+func TestTrayStateOf(t *testing.T) {
+	d := tracker.State{}
+	if got := trayStateOf(d); got != trayStopped {
+		t.Fatalf("idle = %d", got)
+	}
+	d.PausedProjectID = "a"
+	if got := trayStateOf(d); got != trayPaused {
+		t.Fatalf("paused = %d", got)
+	}
+	d.Active = &tracker.Timer{ProjectID: "b"}
+	if got := trayStateOf(d); got != trayRunning {
+		t.Fatalf("running = %d", got)
+	}
+}
+
+func TestTrayNotifyIconDataMatchesWin32Layout(t *testing.T) {
+	want := uintptr(976) // sizeof(NOTIFYICONDATAW) on 64-bit Windows
+	if unsafe.Sizeof(uintptr(0)) == 4 {
+		want = 956
+	}
+	if got := unsafe.Sizeof(trayNotifyIconData{}); got != want {
+		t.Fatalf("NOTIFYICONDATAW size = %d, want %d", got, want)
 	}
 }

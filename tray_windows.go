@@ -8,10 +8,12 @@ import (
 	"image/color"
 	"image/png"
 	"reflect"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf16"
 
@@ -20,33 +22,139 @@ import (
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-func trayIcon(hex string, running bool) ([]byte, error) {
-	if len(hex) != 7 || hex[0] != '#' {
-		return nil, fmt.Errorf("tray color must be a six-digit hex color")
+type trayState int
+
+const (
+	trayStopped trayState = iota
+	trayPaused
+	trayRunning
+)
+
+func trayStateOf(d tracker.State) trayState {
+	if d.Active != nil {
+		return trayRunning
+	}
+	if d.PausedProjectID != "" {
+		return trayPaused
+	}
+	return trayStopped
+}
+
+func parseTrayColor(hex string) (color.NRGBA, error) {
+	if !colorPattern.MatchString(hex) {
+		return color.NRGBA{}, fmt.Errorf("tray color must be a six-digit hex color")
 	}
 	n, err := strconv.ParseUint(hex[1:], 16, 32)
+	if err != nil {
+		return color.NRGBA{}, err
+	}
+	return color.NRGBA{R: uint8(n >> 16), G: uint8(n >> 8), B: uint8(n), A: 255}, nil
+}
+
+// trayProjectMark draws the project's icon, or a full-size circle in the
+// project color, filling the whole tray slot.
+func trayProjectMark(hex, projectIcon string) ([]byte, error) {
+	c, err := parseTrayColor(hex)
 	if err != nil {
 		return nil, err
 	}
 	img := image.NewNRGBA(image.Rect(0, 0, 32, 32))
-	c := color.NRGBA{R: uint8(n >> 16), G: uint8(n >> 8), B: uint8(n), A: 255}
-	symbol := color.NRGBA{255, 255, 255, 255}
-	if 299*int(c.R)+587*int(c.G)+114*int(c.B) > 160000 {
-		symbol = color.NRGBA{0, 0, 0, 255}
+	if projectIcon != "" {
+		source, err := tracker.DecodeProjectIcon(projectIcon)
+		if err != nil {
+			return nil, err
+		}
+		drawScaled(img, source)
+		return encodeICO(img)
 	}
 	for y := 0; y < 32; y++ {
 		for x := 0; x < 32; x++ {
-			dx, dy := x-16, y-16
-			if dx*dx+dy*dy <= 225 {
+			if dx, dy := 2*x-31, 2*y-31; dx*dx+dy*dy <= 31*31 {
 				img.SetNRGBA(x, y, c)
-			}
-			play := x >= 11 && x <= 23 && y >= 16-(23-x)*2/3 && y <= 16+(23-x)*2/3
-			stop := x >= 10 && x <= 22 && y >= 10 && y <= 22
-			if (running && play) || (!running && stop) {
-				img.SetNRGBA(x, y, symbol)
 			}
 		}
 	}
+	return encodeICO(img)
+}
+
+var trayStateColors = map[trayState]color.NRGBA{
+	trayRunning: {R: 0x16, G: 0xa3, B: 0x4a, A: 0xff},
+	trayPaused:  {R: 0xd9, G: 0x77, B: 0x06, A: 0xff},
+	trayStopped: {R: 0x64, G: 0x74, B: 0x8b, A: 0xff},
+}
+
+// trayBlankIcon is a fully transparent icon that keeps the project slot in the
+// tray while no project is running or paused.
+func trayBlankIcon() ([]byte, error) {
+	return encodeICO(image.NewNRGBA(image.Rect(0, 0, 32, 32)))
+}
+
+// trayStateIcon draws a large status symbol without background: green play,
+// amber pause, or gray stop.
+func trayStateIcon(state trayState) ([]byte, error) {
+	c, ok := trayStateColors[state]
+	if !ok {
+		return nil, fmt.Errorf("unknown tray state %d", state)
+	}
+	img := image.NewNRGBA(image.Rect(0, 0, 32, 32))
+	for y := 0; y < 32; y++ {
+		for x := 0; x < 32; x++ {
+			var symbol bool
+			switch state {
+			case trayRunning:
+				symbol = x >= 3 && x <= 29 && 26*abs(2*y-31) <= 29*(29-x)
+			case trayPaused:
+				symbol = y >= 2 && y <= 29 && ((x >= 4 && x <= 12) || (x >= 19 && x <= 27))
+			default:
+				symbol = x >= 3 && x <= 28 && y >= 3 && y <= 28
+			}
+			if symbol {
+				img.SetNRGBA(x, y, c)
+			}
+		}
+	}
+	return encodeICO(img)
+}
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
+}
+
+var colorPattern = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+
+// drawScaled fits source into dst, preserving its aspect ratio, by averaging
+// premultiplied source pixels for each destination pixel.
+func drawScaled(dst *image.NRGBA, source image.Image) {
+	sb := source.Bounds()
+	size := dst.Bounds().Dx()
+	scale := max(float64(sb.Dx()), float64(sb.Dy())) / float64(size)
+	width, height := int(float64(sb.Dx())/scale+0.5), int(float64(sb.Dy())/scale+0.5)
+	offsetX, offsetY := (size-width)/2, (size-height)/2
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			x0, x1 := sb.Min.X+int(float64(x)*scale), sb.Min.X+max(int(float64(x+1)*scale), int(float64(x)*scale)+1)
+			y0, y1 := sb.Min.Y+int(float64(y)*scale), sb.Min.Y+max(int(float64(y+1)*scale), int(float64(y)*scale)+1)
+			var r, g, b, a, count uint64
+			for sy := y0; sy < min(y1, sb.Max.Y); sy++ {
+				for sx := x0; sx < min(x1, sb.Max.X); sx++ {
+					pr, pg, pb, pa := source.At(sx, sy).RGBA()
+					r, g, b, a, count = r+uint64(pr), g+uint64(pg), b+uint64(pb), a+uint64(pa), count+1
+				}
+			}
+			if count == 0 || a == 0 {
+				continue
+			}
+			dst.SetNRGBA(offsetX+x, offsetY+y, color.NRGBA{
+				R: uint8(r * 0xff / a), G: uint8(g * 0xff / a), B: uint8(b * 0xff / a), A: uint8(a / count >> 8),
+			})
+		}
+	}
+}
+
+func encodeICO(img image.Image) ([]byte, error) {
 	var payload bytes.Buffer
 	if err := png.Encode(&payload, img); err != nil {
 		return nil, err
@@ -80,6 +188,23 @@ func trayStatus(d tracker.State, now time.Time) (string, string, bool) {
 		}
 	}
 	return "#64748b", "TimeManager - Stopped (no timer running)", false
+}
+
+// trayStatusIcon returns the icon of the running or paused project, if any.
+func trayStatusIcon(d tracker.State) string {
+	id := d.PausedProjectID
+	if d.Active != nil {
+		id = d.Active.ProjectID
+	}
+	if id == "" {
+		return ""
+	}
+	for _, p := range d.Projects {
+		if p.ID == id {
+			return p.Icon
+		}
+	}
+	return ""
 }
 
 func tooltip(s string) string {
@@ -168,10 +293,21 @@ func trayProjectOptions(d tracker.State) []trayProjectOption {
 
 func (a *App) startTray() func() {
 	done := make(chan struct{})
+	var stateTray struct {
+		sync.Mutex
+		indicator *trayStateIndicator
+	}
 	go func() {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 		systray.Run(func() {
+			if window, err := findSystrayWindow(); err != nil {
+				a.showError(fmt.Errorf("create status tray icon: %w", err))
+			} else {
+				stateTray.Lock()
+				stateTray.indicator = newTrayStateIndicator(window)
+				stateTray.Unlock()
+			}
 			restore := systray.AddMenuItem("Open TimeManager", "Restore the window")
 			stop := systray.AddMenuItem("Stop and save timer", "Save the active booking")
 			pause := systray.AddMenuItem("Pause timer", "Save the current segment and pause tracking")
@@ -197,8 +333,11 @@ func (a *App) startTray() func() {
 			var entries []entryKey
 			tick := time.NewTicker(time.Second)
 			defer tick.Stop()
-			lastColor := ""
-			lastRunning := false
+			// Never a valid color, so the first update always sets an icon.
+			lastColor := "unset"
+			lastProjectIcon := ""
+			lastState := trayState(-1)
+			stateFailed := false
 			update := func() {
 				d := a.store.Snapshot()
 				nextGroups := trayProjectGroups(d)
@@ -272,16 +411,47 @@ func (a *App) startTray() func() {
 					pause.SetTitle("Resume paused timer")
 					pause.Enable()
 				}
-				if hex != lastColor || running != lastRunning {
-					icon, err := trayIcon(hex, running)
+				projectIcon := trayStatusIcon(d)
+				if trayStateOf(d) == trayStopped {
+					hex, projectIcon = "", ""
+				}
+				if hex != lastColor || projectIcon != lastProjectIcon {
+					var icon []byte
+					var err error
+					if hex == "" {
+						icon, err = trayBlankIcon()
+					} else {
+						icon, err = trayProjectMark(hex, projectIcon)
+					}
 					if err != nil {
 						a.showError(fmt.Errorf("create tray icon: %w", err))
 						return
 					}
 					systray.SetIcon(icon)
 					lastColor = hex
-					lastRunning = running
+					lastProjectIcon = projectIcon
 				}
+				stateTray.Lock()
+				if indicator := stateTray.indicator; indicator != nil {
+					state := trayStateOf(d)
+					var icon []byte
+					var err error
+					if state != lastState {
+						icon, err = trayStateIcon(state)
+					}
+					if err == nil {
+						err = indicator.update(icon, tooltip(text))
+					}
+					if err == nil {
+						lastState = state
+						stateFailed = false
+					} else if !stateFailed {
+						// Report once; Explorer may be restarting and the icon is retried every second.
+						stateFailed = true
+						a.showError(fmt.Errorf("update status tray icon: %w", err))
+					}
+				}
+				stateTray.Unlock()
 				systray.SetTooltip(tooltip(text))
 				status.SetTitle(strings.ReplaceAll(tooltip(text), "&", "&&"))
 				if wailsruntime.WindowIsMinimised(a.ctx) {
@@ -326,10 +496,7 @@ func (a *App) startTray() func() {
 					}
 					update()
 				case 5:
-					a.restoreWindow()
-					if err := a.QuitApplication(); err != nil {
-						a.showError(err)
-					}
+					a.requestQuitConfirmation()
 				case 6:
 					if err := a.openProjectSearch(); err != nil {
 						a.showError(fmt.Errorf("open project search: %w", err))
@@ -351,6 +518,10 @@ func (a *App) startTray() func() {
 	}()
 	return func() {
 		close(done)
+		stateTray.Lock()
+		stateTray.indicator.remove()
+		stateTray.indicator = nil
+		stateTray.Unlock()
 		systray.Quit()
 	}
 }

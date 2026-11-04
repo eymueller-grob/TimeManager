@@ -37,7 +37,7 @@ export function Calendar({className, classNames, labels, formatters, ...props}: 
     return <DayPicker
         {...dayPickerProps}
         showOutsideDays
-        showWeekNumber
+        showWeekNumber={dayPickerProps.showWeekNumber ?? true}
         ISOWeek
         className={cn('calendar', className)}
         classNames={{...calendarClassNames, ...classNames}}

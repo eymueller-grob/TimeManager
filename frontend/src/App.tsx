@@ -1,12 +1,15 @@
-import {BUSY_REASON, Button, Check, RunningSpinner, whyDisabled} from './Controls';
+import {BUSY_REASON, Button, Check, MultiSelect, parseMultiselect, ProjectIcon, ProjectMark, RunningSpinner, whyDisabled} from './Controls';
+import {cropRect, DEFAULT_ICON_CROP, emojiIcon, ICON_FILE_TYPES, invertIcon, loadIconImage, MAX_ICON_ZOOM, PROJECT_ICON_SIZE, renderIconImage, type IconCrop, type IconImage} from './projectIcon';
+import {Trash2} from 'lucide-react';
+import {Slider} from './components/ui/slider';
 import {Input} from './components/ui/input';
 import {Textarea} from './components/ui/textarea';
 import {Label} from './components/ui/label';
 import {NativeSelect, NativeSelectOption} from './components/ui/native-select';
-import {useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode} from 'react';
+import {useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode} from 'react';
 import {
     DeleteBooking, DeleteProject, ExportBookings, GetState, RestoreProject,
-    SaveBooking, SaveProject, StopTimer, PauseTimer, ResumeTimer, ToggleFavorite, ToggleTimer,
+    SaveBooking, SaveProject, SaveProjectWithRelated, StopTimer, PauseTimer, ResumeTimer, ToggleFavorite, ToggleTimer,
     SaveSettings, SavePropertyDefinition, MovePropertyDefinition, DeletePropertyDefinition, TestReminder,
     RunInBackground, QuitApplication,
     UpdateTimerStart,
@@ -51,12 +54,18 @@ const monday = (d: Date) => {
 const hoursInRange = (b: Booking, start: Date, end: Date) =>
     Math.max(0, Math.min(new Date(b.end).getTime(), end.getTime()) - Math.max(new Date(b.start).getTime(), start.getTime()));
 
+/** Human-readable property value for summaries and search. */
+function propertyText(def: tracker.PropertyDefinition, value: string): string {
+    if (def.type === 'checkbox') return value === 'true' ? 'Yes' : 'No';
+    if (def.type === 'multiselect') return parseMultiselect(value).join(', ');
+    return value;
+}
+
 function matchesProjectSearch(projects: Project[], project: Project, definitions: tracker.PropertyDefinition[], search: string): boolean {
     const properties = definitions.flatMap(def => {
         const value = project.properties[def.id];
         if (value === undefined) return [];
-        const checkboxLabel = def.type === 'checkbox' ? (value === 'true' ? 'Yes' : value === 'false' ? 'No' : '') : '';
-        return [def.name, value, checkboxLabel];
+        return [def.name, value, propertyText(def, value)];
     });
     return `${project.number} ${projectPath(projects, project.id)} ${project.customer} ${properties.join(' ')}`.toLowerCase().includes(search.toLowerCase());
 }
@@ -79,10 +88,164 @@ function Modal({title, close, busy, children}: {title: string; close: () => void
     </Dialog>;
 }
 
+/** Distinct icons used by projects, in project order, with the names of the projects using each icon. */
+function usedIcons(projects: Project[]): {icon: string; names: string[]}[] {
+    const byIcon = new Map<string, string[]>();
+    for (const p of projects) {
+        if (!p.icon) continue;
+        const names = byIcon.get(p.icon);
+        if (names) names.push(p.name); else byIcon.set(p.icon, [p.name]);
+    }
+    return [...byIcon].map(([icon, names]) => ({icon, names}));
+}
+
+function IconEditor({project, projects, busy, change}: {project: Project; projects: Project[]; busy: boolean; change: (icon: string | undefined) => void}) {
+    const used = useMemo(() => usedIcons(projects), [projects]);
+    const [symbol, setSymbol] = useState('');
+    const [iconError, setIconError] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [pending, setPending] = useState<IconImage | null>(null);
+    const [crop, setCrop] = useState<IconCrop>(DEFAULT_ICON_CROP);
+    const fileInput = useRef<HTMLInputElement>(null);
+    const fail = (err: unknown) => setIconError(err instanceof Error ? err.message : String(err));
+    const attempt = (render: () => string) => {
+        setIconError('');
+        try {
+            change(render());
+            return true;
+        } catch (err: unknown) {
+            fail(err);
+            return false;
+        }
+    };
+    const applySymbol = () => { attempt(() => emojiIcon(symbol, project.color)); };
+    const upload = async (file: File | undefined) => {
+        if (!file) return;
+        setIconError('');
+        setLoading(true);
+        try {
+            setPending(await loadIconImage(file));
+            setCrop(DEFAULT_ICON_CROP);
+        } catch (err: unknown) {
+            fail(err);
+        } finally {
+            setLoading(false);
+            if (fileInput.current) fileInput.current.value = '';
+        }
+    };
+    const invert = async () => {
+        if (!project.icon) return;
+        setIconError('');
+        setLoading(true);
+        try {
+            change(await invertIcon(project.icon));
+        } catch (err: unknown) {
+            fail(err);
+        } finally {
+            setLoading(false);
+        }
+    };
+    const finishCrop = (render: () => string) => { if (attempt(render)) setPending(null); };
+    const reason = whyDisabled([busy, BUSY_REASON], [loading, 'Please wait until the image is processed.'],
+        [!!pending, 'Apply or cancel the crop first.']);
+    return <section className="icon-editor" aria-label="Project icon">
+        <div className="icon-preview" aria-label={project.icon ? 'Current project icon' : 'No project icon'} role="img"><ProjectMark project={project}/></div>
+        <div className="icon-controls">
+            <Label>Project icon (emoji or short text)<Input value={symbol} maxLength={8} placeholder="e.g. 🚀 or AB"
+                onChange={e => setSymbol(e.target.value)} onKeyDown={e => {if (e.key === 'Enter') {e.preventDefault(); if (!reason) applySymbol();}}}/></Label>
+            <ButtonGroup aria-label="Project icon actions">
+                <Button type="button" disabledReason={whyDisabled([!!reason, reason ?? ''], [!symbol.trim(), 'Enter an emoji or short text first.'])} onClick={applySymbol}>Use emoji</Button>
+                <Button type="button" disabledReason={reason} onClick={() => fileInput.current?.click()}>{loading ? 'Loading image…' : 'Upload image…'}</Button>
+                <Button type="button" disabledReason={whyDisabled([!!reason, reason ?? ''], [!project.icon, 'This project has no icon.'])} onClick={() => void invert()}>Invert colors</Button>
+                <Button type="button" disabledReason={whyDisabled([!!reason, reason ?? ''], [!project.icon, 'This project has no icon.'])} onClick={() => {setIconError(''); change(undefined);}}>Remove icon</Button>
+            </ButtonGroup>
+            {used.length > 0 && <div className="used-icons" role="group" aria-label="Already used icons">
+                <span className="hint">Already used:</span>
+                {used.map(({icon, names}) => {
+                    const label = `Use icon of ${names.join(', ')}`;
+                    return <Button key={icon} type="button" variant="outline" size="icon" aria-label={label} aria-pressed={project.icon === icon}
+                        title={label} disabledReason={reason} onClick={() => {setIconError(''); change(icon);}}>
+                        <img src={icon} alt="" aria-hidden="true"/>
+                    </Button>;
+                })}
+            </div>}                        <input ref={fileInput} type="file" hidden aria-label="Project icon image file" accept={`${ICON_FILE_TYPES.join(',')},.svg`}
+                onChange={e => void upload(e.target.files?.[0])}/>
+            {pending && <IconCropper source={pending} crop={crop} setCrop={setCrop} busy={busy}
+                apply={() => finishCrop(() => renderIconImage(pending, crop))}
+                whole={() => finishCrop(() => renderIconImage(pending))}
+                cancel={() => {setIconError(''); setPending(null);}}/>}
+            <p className="hint">Press Win + . to open the Windows emoji picker. Uploaded images (PNG, JPEG, GIF, WebP, or SVG) can be cropped and are scaled to {PROJECT_ICON_SIZE}×{PROJECT_ICON_SIZE} pixels. The icon appears in the app and the system tray.</p>
+            {iconError && <p className="error" role="alert">{iconError}</p>}
+        </div>
+    </section>;
+}
+
+function IconCropper({source, crop, setCrop, busy, apply, whole, cancel}: {
+    source: IconImage; crop: IconCrop; setCrop: (crop: IconCrop) => void; busy: boolean; apply: () => void; whole: () => void; cancel: () => void;
+}) {
+    const area = cropRect(source.width, source.height, crop);
+    const [preview, previewError] = useMemo(() => {
+        try {
+            return [renderIconImage(source, crop), ''];
+        } catch (err: unknown) {
+            return ['', err instanceof Error ? err.message : String(err)];
+        }
+    }, [source, crop]);
+    const fixedX = area.size >= source.width, fixedY = area.size >= source.height;
+    const busyReason = busy ? BUSY_REASON : undefined;
+    return <section className="icon-cropper" aria-label="Crop image">
+        <div className="icon-preview">{preview && <img className="project-icon" src={preview} alt="Cropped icon preview"/>}</div>
+        <div className="icon-crop-controls">
+            <Label>Zoom ({Math.round(crop.zoom * 100)} %)<Slider min={100} max={MAX_ICON_ZOOM * 100} step={10} value={[Math.round(crop.zoom * 100)]} thumbLabels={['Zoom']}
+                onValueChange={([zoom]) => setCrop({...crop, zoom: zoom / 100})}/></Label>
+            <Label title={fixedX ? 'The whole width is already used; zoom in to move horizontally.' : undefined}>Horizontal position<Slider disabled={fixedX} min={0} max={100} value={[crop.x]} thumbLabels={['Horizontal position']}
+                onValueChange={([x]) => setCrop({...crop, x})}/></Label>
+            <Label title={fixedY ? 'The whole height is already used; zoom in to move vertically.' : undefined}>Vertical position<Slider disabled={fixedY} min={0} max={100} value={[crop.y]} thumbLabels={['Vertical position']}
+                onValueChange={([y]) => setCrop({...crop, y})}/></Label>
+            <ButtonGroup aria-label="Crop actions">
+                <Button type="button" className="primary" disabledReason={whyDisabled([busy, BUSY_REASON], [!preview, previewError || 'The preview is not ready.'])} onClick={apply}>Apply crop</Button>
+                <Button type="button" disabledReason={busyReason} onClick={whole}>Use whole image</Button>
+                <Button type="button" disabledReason={busyReason} onClick={cancel}>Cancel crop</Button>
+            </ButtonGroup>
+            {previewError && <p className="error" role="alert">{previewError}</p>}
+        </div>
+    </section>;
+}
+
+/** IDs of all other projects in id's tree (top-level ancestor and all its descendants). */
+function relatedProjectIds(projects: Project[], id: string): string[] {
+    const byId = new Map(projects.map(p => [p.id, p]));
+    if (!byId.has(id)) return [];
+    let root = id;
+    const seen = new Set([root]);
+    for (let parent = byId.get(root)?.parentId ?? ''; parent && !seen.has(parent) && byId.has(parent); parent = byId.get(parent)?.parentId ?? '') {
+        root = parent;
+        seen.add(parent);
+    }
+    const related: string[] = [];
+    const visited = new Set<string>();
+    const queue = [root];
+    while (queue.length) {
+        const current = queue.shift() ?? '';
+        if (visited.has(current)) continue;
+        visited.add(current);
+        if (current !== id) related.push(current);
+        queue.push(...projects.filter(p => p.parentId === current).map(p => p.id));
+    }
+    return related;
+}
+
 function ProjectForm({initial, projects, definitions, busy, error, close, save}: {
-    initial: Project; projects: Project[]; definitions: tracker.PropertyDefinition[]; busy: boolean; error: string; close: () => void; save: (p: Project) => Promise<void>;
+    initial: Project; projects: Project[]; definitions: tracker.PropertyDefinition[]; busy: boolean; error: string; close: () => void; save: (p: Project, applyToRelated: boolean) => Promise<void>;
 }) {
     const [value, setValue] = useState(initial);
+    const [applyToRelated, setApplyToRelated] = useState(true);
+    const differingRelatives = useMemo(() => {
+        const id = value.id || '\u0000new-project';
+        const tree = [...projects.filter(p => p.id !== value.id), {...value, id}];
+        const related = new Set(relatedProjectIds(tree, id));
+        return projects.filter(p => related.has(p.id) && (p.color !== value.color || (p.icon ?? '') !== (value.icon ?? '')));
+    }, [projects, value]);
     const isDescendant = (p: Project) => {
         let id = p.id;
         const seen = new Set<string>();
@@ -93,7 +256,7 @@ function ProjectForm({initial, projects, definitions, busy, error, close, save}:
         }
         return false;
     };
-    const submit = (e: FormEvent) => { e.preventDefault(); void save(value); };
+    const submit = (e: FormEvent) => { e.preventDefault(); void save(value, applyToRelated && differingRelatives.length > 0); };
     return <Modal title={initial.id ? 'Edit project' : 'Create project'} close={close} busy={busy}>
         <form onSubmit={submit}><fieldset disabled={busy}>
             <div className="form-grid">
@@ -109,6 +272,11 @@ function ProjectForm({initial, projects, definitions, busy, error, close, save}:
                 <Label>Project color<Input type="color" value={value.color} onChange={e => setValue({...value, color: e.target.value})}/></Label>
                 <Label className="check" title={value.archived ? 'Archived projects cannot be favorites. Restore the project first.' : undefined}><Check  disabled={value.archived} checked={value.favorite} onCheckedChange={checked => setValue({...value, favorite: checked})}/>Add to favorites</Label>
             </div>
+            <IconEditor project={value} projects={projects} busy={busy} change={icon => setValue({...value, icon})}/>
+            {differingRelatives.length > 0 && <Label className="check" title={`Related projects with a different color or icon: ${differingRelatives.map(p => p.name).join(', ')}`}>
+                <Check checked={applyToRelated} onCheckedChange={setApplyToRelated}/>
+                Apply color and icon to all related projects ({differingRelatives.length} {differingRelatives.length === 1 ? 'project differs' : 'projects differ'}: parents and subprojects)
+            </Label>}
             {definitions.length > 0 && <section className="custom-properties"><h3>Project properties</h3><p className="hint">Optional values for this project. Shared fields are managed in Settings.</p>
                 {definitions.map(def => {
                     const current = value.properties[def.id] ?? '';
@@ -118,10 +286,12 @@ function ProjectForm({initial, projects, definitions, busy, error, close, save}:
                         else properties[def.id] = next;
                         setValue({...value, properties});
                     };
+                    if (def.type === 'checkbox') return <Label key={def.id} className="check"><Check checked={current === 'true'} onCheckedChange={checked => change(checked ? 'true' : 'false')}/>{def.name}</Label>;
+                    if (def.type === 'multiselect') return <div className="property-field" key={def.id}><span>{def.name}</span>
+                        <MultiSelect label={def.name} options={def.options} selected={parseMultiselect(current)} onChange={selected => change(selected.length ? JSON.stringify(selected) : '')}/></div>;
                     return <Label key={def.id}>{def.name}
                         {def.type === 'dropdown' ? <NativeSelect value={current} onChange={e => change(e.target.value)}><NativeSelectOption value="">Not set</NativeSelectOption>{def.options.map(option => <NativeSelectOption key={option} value={option}>{option}</NativeSelectOption>)}</NativeSelect> :
-                            def.type === 'checkbox' ? <NativeSelect value={current} onChange={e => change(e.target.value)}><NativeSelectOption value="">Not set</NativeSelectOption><NativeSelectOption value="true">Yes</NativeSelectOption><NativeSelectOption value="false">No</NativeSelectOption></NativeSelect> :
-                                <Input type={def.type === 'number' ? 'number' : 'text'} step={def.type === 'number' ? 'any' : undefined} value={current} onChange={e => change(e.target.value)}/>}
+                            <Input type={def.type === 'number' ? 'number' : 'text'} step={def.type === 'number' ? 'any' : undefined} value={current} onChange={e => change(e.target.value)}/>}
                     </Label>;
                 })}
             </section>}
@@ -131,8 +301,8 @@ function ProjectForm({initial, projects, definitions, busy, error, close, save}:
     </Modal>;
 }
 
-function BookingForm({initial, projects, busy, error, close, save, remove}: {
-    initial: Booking; projects: Project[]; busy: boolean; error: string; close: () => void;
+function BookingForm({initial, projects, definitions, busy, error, close, save, remove}: {
+    initial: Booking; projects: Project[]; definitions: tracker.PropertyDefinition[]; busy: boolean; error: string; close: () => void;
     save: (b: Booking) => Promise<void>; remove: () => void;
 }) {
     const [projectId, setProjectId] = useState(initial.projectId);
@@ -140,6 +310,7 @@ function BookingForm({initial, projects, busy, error, close, save, remove}: {
     const [end, setEnd] = useState(localInput(new Date(initial.end)));
     const [notes, setNotes] = useState(initial.notes);
     const [exported, setExported] = useState(initial.exported ?? false);
+    const selectedProject = projects.find(p => p.id === projectId);
     const submit = (e: FormEvent) => {
         e.preventDefault();
         void save({id: initial.id, projectId,
@@ -151,11 +322,20 @@ function BookingForm({initial, projects, busy, error, close, save, remove}: {
             <ProjectPicker label="Project" required autoFocus projects={projects} value={projectId} onChange={setProjectId}
                 eligible={projects.filter(p => !p.archived || p.id === initial.projectId)}/>
             <div className="form-grid">
-                <DatePicker label="Start" required dateTime value={start} onChange={setStart}/>
-                <DatePicker label="End" required dateTime value={end} onChange={setEnd}/>
+                <DatePicker label="Start" required dateTime showWeekHint={false} showWeekNumbers={false} value={start} onChange={setStart}/>
+                <DatePicker label="End" required dateTime showWeekHint={false} showWeekNumbers={false} value={end} onChange={setEnd}/>
             </div>
             <Label>Notes<Textarea rows={3} value={notes} onChange={e => setNotes(e.target.value)}/></Label>
             <Label className="check"><Check  checked={exported} onCheckedChange={checked => setExported(checked)}/>Exported</Label>
+            {definitions.length > 0 && selectedProject && <section className="custom-properties booking-properties" aria-label="Project properties">
+                <h3>Project properties</h3><p className="hint">Read-only values of {selectedProject.number} - {selectedProject.name}. Edit them in the project editor.</p>
+                {definitions.map(def => {
+                    const value = selectedProject.properties[def.id];
+                    if (def.type === 'checkbox') return <Label key={def.id} className="check" title="Read-only">
+                        <Check checked={value === 'true'} onCheckedChange={() => undefined} disabled aria-readonly="true"/>{def.name}{value === undefined ? ' (not set)' : ''}</Label>;
+                    return <Label key={def.id}>{def.name}<Input readOnly tabIndex={-1} title="Read-only" placeholder="Not set" value={value === undefined ? '' : propertyText(def, value)}/></Label>;
+                })}
+            </section>}
             <p className="hint">Times use your local timezone. Bookings cannot overlap or end in the future.</p>
             {error && <p className="error" role="alert">{error}</p>}
             <div className="dialog-actions">
@@ -283,7 +463,7 @@ function App() {
     function newProject(parent?: Project) {
         setError('');
         setProjectEdit({id: '', number: '', name: '', customer: parent?.customer ?? '',
-            parentId: parent?.id ?? '', color: parent?.color ?? '#4f6bed', favorite: true, archived: false, properties: {}});
+            parentId: parent?.id ?? '', color: parent?.color ?? '#4f6bed', icon: parent?.icon, favorite: true, archived: false, properties: {}});
     }
 
     function copyProject(project: Project) {
@@ -291,6 +471,16 @@ function App() {
         setProjectEdit({...project, id: '', name: '', archived: false,
             parentId: state?.projects.some(p => p.id === project.parentId && !p.archived) ? project.parentId : '',
             properties: {...project.properties}});
+    }
+
+    function confirmDeleteBooking(booking: main.Booking) {
+        const start = new Date(booking.start), end = new Date(booking.end);
+        const name = state?.projects.find(p => p.id === booking.projectId)?.name ?? 'Unknown project';
+        const range = dateKey(start) === dateKey(end)
+            ? `${start.toLocaleDateString()} ${timeLabel(start)} - ${timeLabel(end)}`
+            : `${start.toLocaleDateString()} ${timeLabel(start)} - ${end.toLocaleDateString()} ${timeLabel(end)}`;
+        setError('');
+        setConfirm({title: 'Delete booking?', message: `The booking for ${name} (${range}) will be permanently deleted.`, action: () => DeleteBooking(booking.id)});
     }
 
     function newBooking(day = new Date()) {
@@ -344,20 +534,18 @@ function App() {
                 <Button className={view === 'projects' ? 'selected' : ''} onClick={() => setView('projects')}>Projects</Button>
                 <Button className={view === 'settings' ? 'selected' : ''} onClick={() => setView('settings')}>Settings</Button>
             </nav>
-            <div className="sidebar-bottom"><span className="dot" style={{background: (activeProject ?? pausedProject)?.color ?? '#94a3b8'}}/>
+            <div className="sidebar-bottom"><ProjectMark project={activeProject ?? pausedProject}/>
                 <div>{activeProject ? 'Tracking in progress' : pausedProject ? 'Timer paused' : 'Ready when you are'}<small>Saved locally on this computer</small></div>
             </div>
         </aside>
         <main className="workspace">
-            <header className="page-heading"><div><p className="eyebrow">YOUR WORKSPACE</p>
-                <h1>{view === 'time' ? 'Time & calendar' : view === 'projects' ? 'Projects' : 'Settings'}</h1>
-                <p className="subtitle">{view === 'time' ? 'Pick a project. Start focusing. Your time is saved.' : view === 'projects' ? 'Organize your customers, projects, and subprojects.' : 'Personalize your workspace and project fields.'}</p>
-            </div><Button disabledReason={busyReason} onClick={() => {setError(''); setExportOpen(true);}}>Export to Excel</Button></header>
+            <header className="page-heading"><h1>{view === 'time' ? 'Time & calendar' : view === 'projects' ? 'Projects' : 'Settings'}</h1>
+                <Button disabledReason={busyReason} onClick={() => {setError(''); setExportOpen(true);}}>Export to Excel</Button></header>
             {!modalOpen && error && <div className="error banner" role="alert">{error}<Button onClick={() => setError('')}>Dismiss</Button></div>}
             {notice && <div className="success banner" role="status">{notice}</div>}
-            <section className={`timer-panel ${active ? 'running' : pausedProject ? 'paused' : ''}`} style={{borderLeftColor: (activeProject ?? pausedProject)?.color ?? '#cbd5e1'}}>
+            <div className={`timer-dock${active || pausedProject ? ' sticky' : ''}`}><section aria-label="Current timer" className={`timer-panel ${active ? 'running sticky' : pausedProject ? 'paused sticky' : ''}`} style={{borderLeftColor: (activeProject ?? pausedProject)?.color ?? '#cbd5e1'}}>
                 <div><p className="eyebrow">{active ? 'CURRENTLY TRACKING' : pausedProject ? 'TIMER PAUSED' : 'NO TIMER RUNNING'}</p>
-                    <h2>{active && <RunningSpinner/>}{activeProject ? `${activeProject.number} - ${projectPath(projects, activeProject.id)}` : pausedProject ? `${pausedProject.number} - ${projectPath(projects, pausedProject.id)}` : 'Start with a favorite project'}</h2>
+                    <h2>{active && <RunningSpinner/>}<ProjectIcon project={activeProject ?? pausedProject}/>{activeProject ? `${activeProject.number} - ${projectPath(projects, activeProject.id)}` : pausedProject ? `${pausedProject.number} - ${projectPath(projects, pausedProject.id)}` : 'Start with a favorite project'}</h2>
                     <p>{active ? `Started ${new Date(active.start).toLocaleString()} - ${activeProject?.customer}` : pausedProject ? 'The current segment is saved. Resume to create a new booking segment.' : 'Click once to start. Click again to stop and save.'}</p>
                 </div>
                 <div className="timer-right"><output className="timer-digits" aria-label="Elapsed time">{duration(active ? now.getTime() - new Date(active.start).getTime() : 0)}</output>
@@ -375,7 +563,7 @@ function App() {
                         <Button className="primary" disabledReason={busyReason} onClick={() => void run(ResumeTimer)}>Resume</Button>
                     </ButtonGroup>}
                 </div>
-            </section>
+            </section></div>
             {pausedProject && <p className="hint">Paused time is not included in bookings. Each resume starts a separate booking segment.</p>}
             {view === 'time' && <p><Button disabledReason={busyReason} onClick={() => void run(StartTemporaryTimer)}>Start temporary timer</Button> <span className="hint">{state.settings.requireTemporaryProject
                 ? 'Track unassigned time. Choose a project before stopping, pausing, switching, or quitting; use Set project to assign a running session.'
@@ -400,13 +588,13 @@ function App() {
                     <ProjectTree label="Project directory hierarchy" projects={ordered} matches={filtered} searching={!!search.trim()}
                         render={(p, context) => <div className={`directory-row ${p.archived ? 'archived' : active?.projectId === p.id ? 'running-project' : state.pausedProjectId === p.id ? 'paused-project' : ''}`}>
                             <Button className="star" aria-label={`${p.favorite ? 'Remove' : 'Add'} favorite ${p.number} ${p.name}`} disabledReason={whyDisabled([busy, BUSY_REASON], [p.archived, 'Archived projects cannot be favorites. Restore the project first.'])} onClick={() => void run(() => ToggleFavorite(p.id))}>{p.favorite ? '\u2605' : '\u2606'}</Button>
-                            <div className="project-name"><span className="dot" style={{background: p.color}}/><div><strong>{p.number} - {p.name}</strong>
+                            <div className="project-name"><ProjectMark project={p}/><div><strong>{p.number} - {p.name}</strong>
                                 {active?.projectId === p.id && <span className="running-badge"><RunningSpinner/>RUNNING</span>}
                                 {!active && state.pausedProjectId === p.id && <span className="pill">PAUSED</span>}
                                 <small>{p.parentId ? projectPath(projects, p.id) : 'Top-level project'}{p.archived ? ' / Archived' : ''}{context ? ' / Ancestor context' : ''}</small></div></div>
                             <div>{p.customer}
                                 {state.propertyDefinitions.filter(def => p.properties[def.id] !== undefined).map(def =>
-                                    <small className="property-summary" key={def.id}>{def.name}: {def.type === 'checkbox' ? (p.properties[def.id] === 'true' ? 'Yes' : 'No') : p.properties[def.id]}</small>)}
+                                    <small className="property-summary" key={def.id}>{def.name}: {propertyText(def, p.properties[def.id])}</small>)}
                             </div>
                             <div className="row-actions"><Button disabledReason={busyReason} onClick={() => {setError(''); setProjectEdit(p);}}>Edit</Button>
                                 <Button disabledReason={busyReason} aria-label={`Copy project ${p.number} ${p.name}`} onClick={() => copyProject(p)}>Copy</Button>
@@ -428,10 +616,10 @@ function App() {
                     {!favorites.length ? <div className="empty panel"><h3>Your favorites go here</h3><p>Create a project or mark one as a favorite in Projects.</p><Button className="primary" disabledReason={busyReason} onClick={() => newProject()}>Create project</Button></div> :
                         !filteredFavorites.length ? <div className="empty panel" role="status"><h3>No favorite projects match your search</h3><p>Try a different number, project name, customer, or property, or clear the search.</p></div> :
                         <ProjectTree label="Favorite project hierarchy" projects={ordered} matches={filteredFavorites} searching={!!favoriteSearch.trim()}
-                            render={(p, context) => context ? <div className="tree-context"><span className="dot" style={{background: p.color}}/>{p.number} - {p.name}<small>Ancestor project</small></div> :
+                            render={(p, context) => context ? <div className="tree-context"><ProjectMark project={p}/>{p.number} - {p.name}<small>Ancestor project</small></div> :
                             <Button key={p.id} className={`favorite-card ${active?.projectId === p.id ? 'active' : ''}`} style={{borderLeftColor: p.color}}
                             disabledReason={busyReason} aria-pressed={active?.projectId === p.id} onClick={() => void run(() => ToggleTimer(p.id))} aria-label={`${active?.projectId === p.id ? 'Stop' : state.pausedProjectId === p.id ? 'Resume' : 'Start'} timer for ${p.number} ${p.name}`}>
-                            <div className="card-top"><span className="project-number">{p.number}</span><span className={active?.projectId === p.id ? 'running-badge' : 'pill'}>{active?.projectId === p.id && <RunningSpinner/>}{active?.projectId === p.id ? 'RUNNING' : state.pausedProjectId === p.id ? 'PAUSED' : 'START'}</span></div>
+                            <div className="card-top"><span className="project-number"><ProjectIcon project={p}/>{p.number}</span><span className={active?.projectId === p.id ? 'running-badge' : 'pill'}>{active?.projectId === p.id && <RunningSpinner/>}{active?.projectId === p.id ? 'RUNNING' : state.pausedProjectId === p.id ? 'PAUSED' : 'START'}</span></div>
                             <strong>{p.name}</strong><span className="card-customer">{p.customer}</span>
                             {p.parentId && <small>{projectPath(projects, p.parentId)}</small>}
                         </Button>}/>}
@@ -468,8 +656,8 @@ function App() {
                                     {ordered.filter(p => projectTotals.has(p.id)).map(p => {
                                         const allExported = bookings.filter(b => b.projectId === p.id).every(b => b.exported);
                                         return <li key={p.id} className={`booking-card${allExported ? ' exported-booking' : ''}`} style={{borderLeftColor: allExported ? undefined : p.color}}>
-                                        <strong>{p.number} - {p.name}</strong>
-                                        <span className="summary-duration">{duration(projectTotals.get(p.id) ?? 0)}</span>
+                                        <strong><ProjectIcon project={p}/>{p.number} - {p.name}</strong>
+                                        <span className="summary-duration">{((projectTotals.get(p.id) ?? 0) / 3600000).toFixed(2)} h</span>
                                         {p.archived && <small>Archived</small>}
                                         {allExported && <small>Exported</small>}
                                     </li>;})}
@@ -477,20 +665,27 @@ function App() {
                                     const p = projects.find(p => p.id === b.projectId);
                                     const start = new Date(Math.max(new Date(b.start).getTime(), day.getTime()));
                                     const finish = new Date(Math.min(new Date(b.end).getTime(), end.getTime()));
-                                    return <Button key={b.id} className={`booking-card${b.exported ? ' exported-booking' : ''}`} style={{borderLeftColor: b.exported ? undefined : p?.color}} disabledReason={busyReason} onClick={() => {setError(''); setBookingEdit(b);}}>
-                                        <span className="booking-time">{timeLabel(start)} - {finish.getTime() === end.getTime() ? '24:00' : timeLabel(finish)}</span>
-                                        <strong>{p?.number} - {p?.name}</strong><small>{duration(hoursInRange(b, day, end))}{p?.archived ? ' / Archived' : ''}</small>
-                                        {b.notes && <span className="booking-notes">{b.notes}</span>}
-                                        {b.exported && <small>Exported</small>}
-                                    </Button>;
+                                    const label = `${timeLabel(start)} - ${finish.getTime() === end.getTime() ? '24:00' : timeLabel(finish)}`;
+                                    return <div key={b.id} className="booking-entry">
+                                        <Button className={`booking-card${b.exported ? ' exported-booking' : ''}`} style={{borderLeftColor: b.exported ? undefined : p?.color}} disabledReason={busyReason} onClick={() => {setError(''); setBookingEdit(b);}}>
+                                            <span className="booking-time">{label}</span>
+                                            <strong><ProjectIcon project={p}/>{p?.number} - {p?.name}</strong><small>{duration(hoursInRange(b, day, end))}{p?.archived ? ' / Archived' : ''}</small>
+                                            {b.notes && <span className="booking-notes">{b.notes}</span>}
+                                            {b.exported && <small>Exported</small>}
+                                        </Button>
+                                        <Button className="booking-delete" variant="ghost" size="icon-xs" aria-label={`Delete booking ${label} ${p?.name ?? ''}`.trim()}
+                                            title="Delete booking" disabledReason={busyReason} onClick={() => confirmDeleteBooking(b)}>
+                                            <Trash2 aria-hidden="true"/>
+                                        </Button>
+                                    </div>;
                                 })}
-                                {calendarView === 'details' && runningHere && <div className="booking-card pending" style={{borderLeftColor: activeProject?.color}}><span>Running since {timeLabel(new Date(Math.max(new Date(active.start).getTime(), day.getTime())))}</span><strong>{activeProject?.name}</strong><small>Saved when stopped</small></div>}
+                                {calendarView === 'details' && runningHere && <div className="booking-card pending" style={{borderLeftColor: activeProject?.color}}><span>Running since {timeLabel(new Date(Math.max(new Date(active.start).getTime(), day.getTime())))}</span><strong><ProjectIcon project={activeProject}/>{activeProject?.name}</strong><small>Saved when stopped</small></div>}
                                 {!bookings.length && (calendarView === 'summary' || !runningHere) && <p className="day-empty">No bookings</p>}
                             </div>
                             <Button className="add-day" aria-label={`Add booking ${dateKey(day)}`} disabledReason={whyDisabled([busy, BUSY_REASON], [day > now, 'Bookings cannot be added for future days.'], [!projects.some(p => !p.archived), 'Create an active project before adding bookings.'])} onClick={() => newBooking(day)}>+ Add</Button>
                         </section>;
                     })}</div>
-                    <p className="hint">{calendarView === 'summary' ? 'Daily project totals combine saved bookings per project in hours:minutes:seconds. Switch to Booking details to edit individual bookings. Projects and subprojects are totaled separately.' : 'Click a booking to edit it.'} Overnight bookings appear on each day they cover. Totals exclude the running timer.</p>
+                    <p className="hint">{calendarView === 'summary' ? 'Daily project totals combine saved bookings per project in decimal hours. Switch to Booking details to edit individual bookings. Projects and subprojects are totaled separately.' : 'Click a booking to edit it, or click its trash can to delete it.'} Overnight bookings appear on each day they cover. Totals exclude the running timer.</p>
                 </Card>
             </>}
         </main>
@@ -516,10 +711,10 @@ function App() {
         {timerEdit && <TimerStartForm initial={timerEdit} now={now} busy={busy} error={closeRequested ? '' : error} close={() => setTimerEdit(null)}
             save={start => run(() => UpdateTimerStart(timerEdit, start), () => setTimerEdit(null))}/>}
         {projectEdit && <ProjectForm initial={projectEdit} projects={ordered} definitions={state.propertyDefinitions} busy={busy} error={closeRequested ? '' : error} close={() => setProjectEdit(null)}
-            save={p => run(() => SaveProject(p), () => setProjectEdit(null))}/>}
-        {bookingEdit && <BookingForm initial={bookingEdit} projects={ordered} busy={busy} error={closeRequested ? '' : error} close={() => setBookingEdit(null)}
+            save={(p, applyToRelated) => run(() => applyToRelated ? SaveProjectWithRelated(p) : SaveProject(p), () => setProjectEdit(null))}/>}
+        {bookingEdit && <BookingForm initial={bookingEdit} projects={ordered} definitions={state.propertyDefinitions} busy={busy} error={closeRequested ? '' : error} close={() => setBookingEdit(null)}
             save={b => run(() => SaveBooking(b), () => setBookingEdit(null))}
-            remove={() => {setError(''); setConfirm({title: 'Delete booking?', message: 'This saved time booking will be permanently deleted.', action: () => DeleteBooking(bookingEdit.id)}); setBookingEdit(null);}}/>}
+            remove={() => {confirmDeleteBooking(bookingEdit); setBookingEdit(null);}}/>}
         {confirm && <Modal title={confirm.title} close={() => setConfirm(null)} busy={busy}>
             <p>{confirm.message}</p>{!closeRequested && error && <p className="error" role="alert">{error}</p>}
             <div className="dialog-actions"><Button disabledReason={busyReason} onClick={() => setConfirm(null)}>Cancel</Button><Button disabledReason={busyReason} className="danger" onClick={() => void run(confirm.action, () => setConfirm(null))}>Confirm</Button></div>

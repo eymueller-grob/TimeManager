@@ -13,6 +13,27 @@ Customize its appearance and shared project properties in Settings.
   color. Numbers may repeat; names must be unique across active and archived
   projects, ignoring capitalization and surrounding spaces. Add favorites
   using the star button, or create subprojects from an existing project.
+- **Project icons:** in the project editor, enter an emoji or short text
+  (press Win + . for the emoji picker) and click Use emoji, or click Upload
+  image… to choose a PNG, JPEG, GIF, WebP, or SVG file (up to 5 MB). Emojis and
+  text are trimmed to their visible pixels and enlarged to fill the icon. Icons
+  already used by any project (including archived ones) appear under "Already
+  used"; click one to reuse it, and hover to see which projects use it. Every icon
+  is scaled to a 64 × 64 px PNG and saved with the project; SVG files are
+  rasterized, so no scripts are stored. Icons appear in favorites, the
+  directory, project pickers, the timer panel, bookings, and the tray. Remove
+  icon restores the colored dot. After an upload, crop the image with the Zoom
+  (100–500 %), Horizontal position, and Vertical position sliders, then click
+  Apply crop, Use whole image (fits the image and adds transparent padding), or
+  Cancel crop. Invert colors inverts the current icon's colors and keeps
+  transparency. Copies keep the icon; new subprojects inherit the parent's color
+  and icon.
+- **Shared color and icon:** when related projects (the top-level project and
+  all its subprojects, including archived ones) have a different color or
+  icon, the editor shows "Apply color and icon to all related projects", which
+  is checked by default. Saving with it checked gives the whole project tree
+  the same color and icon in one atomic save. Uncheck it to change only the
+  edited project.
 - **Copy project:** click Copy in a project's row to open a prefilled project
   editor. Enter a new unique project name, adjust any details, and save.
   The copy retains the number, customer, color, favorite flag, custom properties,
@@ -28,9 +49,10 @@ Customize its appearance and shared project properties in Settings.
   timer (default: every 60 minutes) and no running timer (default: every 30
   minutes). Enter positive whole-minute intervals and click Save reminders.
   Preview buttons show each message without changing the timer or saving settings.
-  A small native window appears at the primary monitor's bottom-right, within
+  A small card in the app's style (matching the saved appearance, with the
+  running project's color, icon, and live elapsed time) appears at the primary monitor's bottom-right, within
   its work area above the taskbar, including while the app is hidden in the tray.
-  It does not steal keyboard focus. Close dismisses it; Open TimeManager
+  It does not steal keyboard focus, even when clicked. Dismiss closes it; Open TimeManager
   restores the main window without stopping or starting a timer. Messages
   disappear automatically after 15 seconds and use the saved appearance.
   Only one message window is shown at a time.
@@ -39,8 +61,10 @@ Customize its appearance and shared project properties in Settings.
   later reminders. Reminders run only while the app is open, and sleep/resume
   shows at most one overdue reminder rather than replaying missed intervals.
 - **Settings / Project properties:** define shared optional Text, Number,
-  Checkbox, or Dropdown fields, then fill their values in each project's
-  editor. Subprojects have independent values; they do not inherit from their
+  Checkbox, Dropdown, or Dropdown (multiple selection) fields, then fill their
+  values in each project's editor. Checkbox fields are real checkboxes;
+  multiple-selection fields open a dropdown where any number of options can be
+  checked (or cleared with **Clear selection**). Subprojects have independent values; they do not inherit from their
   parent. Unset fields remain blank in exports; checkbox fields distinguish
   unset, Yes, and No. Numbers must be finite.
   Rename definitions or edit dropdown options in Settings. Use **Move up** and
@@ -57,6 +81,9 @@ Customize its appearance and shared project properties in Settings.
   RUNNING badge (static when reduced motion is requested), plus highlighted favorite
   card and directory row. The timer panel is also emphasized in light and dark
   mode; project colors are retained. Highlights move when switching timers.
+  While a timer is running or paused, the timer panel stays pinned to the top
+  of the window when scrolling, in every view. The page heading is a single
+  compact line with the view name and Export to Excel.
   Search favorite projects by number, name, customer, or parent hierarchy.
   Search is case-insensitive; Clear favorite search restores all favorites.
   Filtering only changes the displayed cards, never favorites or the running
@@ -72,16 +99,21 @@ Customize its appearance and shared project properties in Settings.
   tray, and reminder cadence. Cancel leaves the original start unchanged.
 - **Calendar:** navigate weeks or select a date. Add manual bookings, or click
   an existing booking to edit its project, start/end, and notes, or delete it.
+  Each booking card also has a trash can button in its top-right corner that
+  deletes the booking after confirmation (overnight bookings are deleted as a
+  whole, from any day they appear on).
   Bookings cannot overlap or end in the future. Overnight bookings appear on
   every day they cover. Daily/weekly totals exclude the running timer.
   Use **Calendar view → Daily project totals** for one entry per project per
-  day showing combined booked time as hours:minutes:seconds, without individual
+  day showing combined booked time as decimal hours (for example `2.50 h`), without individual
   booking times or notes. Projects and subprojects remain separate, archived
   projects are included, and overnight bookings count only their portion on
   each local day. Running timers are excluded. Switch back to **Booking details**
   to edit individual bookings. This view does not change stored bookings.
   Each booking has an **Exported** checkbox in its editor; it can be set or
-  cleared manually. Exported bookings are gray but remain editable and count
+  cleared manually. The booking editor also shows the selected project's
+  custom properties read-only (unset values show "Not set"); they follow the
+  project selection and are edited only in the project editor. Exported bookings are gray but remain editable and count
   toward totals. A daily project total is gray only when all its contributing
   bookings are exported; mixed totals retain their project color.
   Both views display the calendar week as **CW45** beside the date range on
@@ -91,7 +123,8 @@ Customize its appearance and shared project properties in Settings.
   "Bookings cannot be added for future days."
   All date selectors (calendar navigation, booking start/end, timer start, and
   Excel date filters) use the shadcn Calendar with a **CW** column on every
-  ISO Monday-to-Sunday row. Click a date field to open its calendar; no
+  ISO Monday-to-Sunday row, except the booking editor's Start/End, which show
+  no calendar weeks. Click a date field to open its calendar; no
   separate calendar button is needed. Use arrows to move between dates,
   Home/End for the row, Page Up/Down for months, and Enter/Space to select.
   Escape dismisses the picker without closing the surrounding editor. Dates
@@ -136,7 +169,8 @@ Customize its appearance and shared project properties in Settings.
   `.xlsx` file. The workbook includes customer, project number, full project
   hierarchy, local start/end, decimal hours, notes, project color, and a total.
   Each custom property adds a `Property: <name>` column. Number values are
-  numeric Excel cells and checkbox values are Boolean cells; unset values
+  numeric Excel cells and checkbox values are Boolean cells; multiple-selection
+  values are exported as comma-separated text in option order; unset values
   are blank. Text values are exported as text, not formulas.
   Bookings crossing filter boundaries are clipped to the chosen local dates.
   Archived projects are included; an active timer is not included until stopped.
@@ -159,11 +193,13 @@ Customize its appearance and shared project properties in Settings.
   status saving fails after the Excel file is saved, the error identifies the
   saved file; no statuses are changed. Bookings edited or deleted during export
   prevent status marking rather than accidentally marking changed time.
-- **Windows tray:** minimizing hides the window to a project-colored play icon
-  while running, or a gray stop-square icon when idle. Hover for the project name
+- **Windows tray:** the app shows two full-size tray icons. The project icon
+  shows the running (or paused) project's picture, or a circle in its color;
+  it stays empty when nothing is tracked. The status icon shows a large green
+  play, amber pause, or gray stop symbol without a background circle. Hover either icon for the project name
   first, running/stopped state, live elapsed time, and project number. The same
   status appears in the tray menu; no extra status window is opened. Click
-  for Open, Stop and save, **Change project**, and Quit (last).
+  either icon for Open, Stop and save, **Change project**, and Quit (last).
   Change project offers three direct navigation routes to non-archived favorites:
   **All favorites → project**, **By customer → customer → project**, and
   **By top-level project → parent → project**. Entries show number, name, and customer. Choosing
@@ -188,16 +224,18 @@ Customize its appearance and shared project properties in Settings.
   timers. Selecting the running project leaves its original start unchanged.
   Results refresh when projects change; save errors stay visible in the search
   window without discarding the running timer. Grouped menus remain favorites-only.
-  Windows may place the icon in its
-  hidden-icons overflow; move it into the visible tray in Windows settings.
-  Windows tray icons do not support a permanently visible project-name or
+  Windows may place the icons in its
+  hidden-icons overflow; drag both into the visible tray and arrange them with
+  the project icon on the left and the status icon on the right (Windows
+  decides the initial order). Each tray icon is a fixed small square; Windows
+  tray icons do not support a permanently visible project-name or
   elapsed-time label beside the icon.
 - **Close / Quit:** closing the window always asks whether to Run in background,
   Quit, or Cancel, even when no timer is running. Run in background hides the
   window to the tray without changing timers; reminders keep working.
   Cancel keeps the window open. Quit stops and saves any running timer before
   exiting; a save failure keeps the app open and shows the error.
-  Tray Quit exits directly, also stopping and saving any running timer.
+  Tray Quit opens the window and shows the same confirmation before exiting.
 
 ## Local data and recovery
 
@@ -217,7 +255,10 @@ silently reset or overwritten. Exported project/customer details use their
 current values, including later project edits. Custom properties likewise use
 current definitions and values, rather than historical snapshots.
 
-Saved data uses schema version 7. Version 1 through 6 files are validated and atomically
+Saved data uses schema version 9, which adds the multiple-selection property
+type (values stored as JSON lists of options). Version 8 added optional project icons stored as
+PNG data URLs (at most 64 KB and 128 px per side; invalid icons are rejected
+without rewriting the file). Version 1 through 8 files are validated and atomically
 migrated on opening, preserving projects, bookings, custom properties, appearance,
 the original active timer start, and exported-booking status. Migration defaults to allowing temporary bookings.
 Migration adds the default enabled 60/30-minute
@@ -226,7 +267,7 @@ For versions 1-3, duplicate project names are automatically given a suffix such 
 names already in use; the first occurrence keeps its name. Project IDs, numbers,
 bookings, and active timers remain unchanged. Migration failures leave the original
 file untouched. Keep a backup before upgrading; older versions of the app do not
-support version 6. Existing version 1-4 bookings migrate with Exported off; their
+support version 9. Existing version 1-4 bookings migrate with Exported off; their
 timestamps and other metadata are preserved.
 
 ## Prerequisites
@@ -255,7 +296,8 @@ the user `PATH`. Restart VS Code and open a new terminal to pick up these change
 - `app_test.go`: Go bridge readiness tests.
 - `internal/tracker/`: persistent project, timer, booking, and export logic with
   Go tests.
-- `tray_windows.go`: Windows notification icon, live tooltip, and tray actions.
+- `tray_windows.go`: Windows notification icons, live tooltip, and tray actions.
+- `tray_state_windows.go`: second (status) notification icon sharing the tray menu.
 - `build/appicon.png` and `build/windows/icon.ico`: app and Windows installer icons.
 - `reminder_windows.go`: focus-preserving native corner reminder window.
 - `frontend/src/App.test.tsx`: workspace interaction tests.
@@ -305,6 +347,10 @@ does not supply the Go bridge, so use Wails for end-to-end development.
 Run `wails build` from the project root. On Windows, the executable is
 `build/bin/TimeManager.exe`. Build resources under `build/` may be customized;
 generated executables, frontend bundles, and dependencies are ignored by Git.
+
+To build and package a release, run `.\scripts\package.ps1`. It runs
+`wails build` and zips the executable to `build/bin/TimeManager_<version>.zip`,
+using the version from `wails.json`.
 
 The app version is defined once as `info.productVersion` in `wails.json`.
 Wails embeds it in the executable's Windows version resource, and Vite injects

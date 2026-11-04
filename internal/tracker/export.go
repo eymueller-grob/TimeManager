@@ -302,6 +302,12 @@ func exportPropertyValues(definitions []PropertyDefinition, p Project) ([]interf
 			values = append(values, n)
 		case "checkbox":
 			values = append(values, value == "true")
+		case "multiselect":
+			selected, err := MultiselectValues(def, value)
+			if err != nil {
+				return nil, fmt.Errorf("export property %q: %w", def.Name, err)
+			}
+			values = append(values, strings.Join(selected, ", "))
 		default:
 			values = append(values, value)
 		}

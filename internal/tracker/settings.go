@@ -1,6 +1,7 @@
 package tracker
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -80,7 +81,7 @@ func validateSettings(d State) error {
 			if len(def.Options) != 0 {
 				return errors.New("only dropdown properties can have options")
 			}
-		case "dropdown":
+		case "dropdown", "multiselect":
 			if len(def.Options) == 0 {
 				return errors.New("dropdown properties require at least one option")
 			}
@@ -92,7 +93,7 @@ func validateSettings(d State) error {
 				seen[option] = true
 			}
 		default:
-			return errors.New("property type must be text, number, checkbox, or dropdown")
+			return errors.New("property type must be text, number, checkbox, dropdown, or multiselect")
 		}
 		definitions[def.ID] = def
 	}
@@ -125,8 +126,34 @@ func validatePropertyValue(def PropertyDefinition, value string) error {
 		if !slices.Contains(def.Options, value) {
 			return errors.New("selected dropdown option is no longer available; update the project value first")
 		}
+	case "multiselect":
+		_, err := MultiselectValues(def, value)
+		return err
 	}
 	return nil
+}
+
+// MultiselectValues decodes a multiselect value, a JSON array of distinct
+// options, and validates it against the definition.
+func MultiselectValues(def PropertyDefinition, value string) ([]string, error) {
+	var selected []string
+	if err := json.Unmarshal([]byte(value), &selected); err != nil {
+		return nil, errors.New("multiselect value must be a list of options")
+	}
+	if len(selected) == 0 {
+		return nil, errors.New("select at least one option or clear the value")
+	}
+	seen := make(map[string]bool)
+	for _, option := range selected {
+		if seen[option] {
+			return nil, errors.New("multiselect options must be unique")
+		}
+		seen[option] = true
+		if !slices.Contains(def.Options, option) {
+			return nil, errors.New("selected dropdown option is no longer available; update the project value first")
+		}
+	}
+	return selected, nil
 }
 
 func (s *Store) SaveSettings(settings Settings) error {

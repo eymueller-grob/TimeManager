@@ -136,6 +136,7 @@ export namespace tracker {
 	    customer: string;
 	    parentId: string;
 	    color: string;
+	    icon?: string;
 	    favorite: boolean;
 	    archived: boolean;
 	    properties: Record<string, string>;
@@ -152,6 +153,7 @@ export namespace tracker {
 	        this.customer = source["customer"];
 	        this.parentId = source["parentId"];
 	        this.color = source["color"];
+	        this.icon = source["icon"];
 	        this.favorite = source["favorite"];
 	        this.archived = source["archived"];
 	        this.properties = source["properties"];

@@ -22,6 +22,7 @@ type Project struct {
 	Customer   string            `json:"customer"`
 	ParentID   string            `json:"parentId"`
 	Color      string            `json:"color"`
+	Icon       string            `json:"icon,omitempty"`
 	Favorite   bool              `json:"favorite"`
 	Archived   bool              `json:"archived"`
 	Properties map[string]string `json:"properties"`
@@ -58,11 +59,14 @@ type Store struct {
 	now  func() time.Time
 }
 
+// CurrentVersion is the schema version written by this build.
+const CurrentVersion = 9
+
 func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return nil, fmt.Errorf("create data directory: %w", err)
 	}
-	s := &Store{path: path, now: time.Now, data: State{Version: 7, Projects: []Project{}, Bookings: []Booking{}, Settings: DefaultSettings(), PropertyDefinitions: []PropertyDefinition{}}}
+	s := &Store{path: path, now: time.Now, data: State{Version: CurrentVersion, Projects: []Project{}, Bookings: []Booking{}, Settings: DefaultSettings(), PropertyDefinitions: []PropertyDefinition{}}}
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
@@ -78,7 +82,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("saved data is invalid: %w", err)
 	}
 	s.data = saved
-	if s.data.Version < 7 {
+	if s.data.Version < CurrentVersion {
 		if err := s.change(func(d *State) error {
 			if d.Version == 1 {
 				d.Settings = DefaultSettings()
@@ -98,11 +102,13 @@ func Open(path string) (*Store, error) {
 					d.Bookings[i].Exported = false
 				}
 			}
-			d.Settings.RequireTemporaryProject = false
-			d.Version = 7
+			if d.Version < 7 {
+				d.Settings.RequireTemporaryProject = false
+			}
+			d.Version = CurrentVersion
 			return nil
 		}); err != nil {
-			return nil, fmt.Errorf("migrate saved data to version 7: %w", err)
+			return nil, fmt.Errorf("migrate saved data to version %d: %w", CurrentVersion, err)
 		}
 	}
 	if s.data.Projects == nil {
@@ -202,7 +208,7 @@ func project(d State, id string) (Project, bool) {
 }
 
 func validate(d State) error {
-	if d.Version < 1 || d.Version > 7 {
+	if d.Version < 1 || d.Version > CurrentVersion {
 		return fmt.Errorf("unsupported data version %d", d.Version)
 	}
 	if d.Version >= 2 {
@@ -241,6 +247,9 @@ func validate(d State) error {
 		}
 		if p.Archived && p.Favorite {
 			return errors.New("archived projects cannot be favorites")
+		}
+		if err := ValidateProjectIcon(p.Icon); err != nil {
+			return err
 		}
 	}
 	for _, p := range d.Projects {
@@ -302,40 +311,109 @@ func validate(d State) error {
 
 func (s *Store) SaveProject(p Project) error {
 	return s.change(func(d *State) error {
-		p.Number = strings.TrimSpace(p.Number)
-		p.Name = strings.TrimSpace(p.Name)
-		p.Customer = strings.TrimSpace(p.Customer)
-		p.Properties = maps.Clone(p.Properties)
-		if p.Properties == nil {
-			p.Properties = map[string]string{}
-		}
-		for id, value := range p.Properties {
-			value = strings.TrimSpace(value)
-			if value == "" {
-				delete(p.Properties, id)
-			} else {
-				p.Properties[id] = value
-			}
-		}
-		if p.ID == "" {
-			if p.Archived {
-				return errors.New("new projects cannot be archived")
-			}
-			p.ID = uuid.NewString()
-			d.Projects = append(d.Projects, p)
-			return nil
-		}
-		for i, old := range d.Projects {
-			if old.ID == p.ID {
-				if p.Archived != old.Archived {
-					return errors.New("use Delete/Archive or Restore to change archive status")
-				}
-				d.Projects[i] = p
-				return nil
-			}
-		}
-		return errors.New("project no longer exists")
+		_, err := saveProject(d, p)
+		return err
 	})
+}
+
+// SaveProjectWithRelated saves p and copies its color and icon to every
+// project in the same tree (its top-level ancestor and all descendants,
+// including archived ones) in a single atomic change.
+func (s *Store) SaveProjectWithRelated(p Project) error {
+	return s.change(func(d *State) error {
+		id, err := saveProject(d, p)
+		if err != nil {
+			return err
+		}
+		saved, _ := project(*d, id)
+		for _, related := range RelatedProjectIDs(d.Projects, id) {
+			for i := range d.Projects {
+				if d.Projects[i].ID == related {
+					d.Projects[i].Color = saved.Color
+					d.Projects[i].Icon = saved.Icon
+				}
+			}
+		}
+		return nil
+	})
+}
+
+// RelatedProjectIDs returns the IDs of all other projects in id's tree: its
+// top-level ancestor and every descendant of that ancestor. Parent cycles are
+// tolerated so callers can rely on validation to report them.
+func RelatedProjectIDs(projects []Project, id string) []string {
+	parents := make(map[string]string, len(projects))
+	children := make(map[string][]string, len(projects))
+	for _, p := range projects {
+		parents[p.ID] = p.ParentID
+		if p.ParentID != "" {
+			children[p.ParentID] = append(children[p.ParentID], p.ID)
+		}
+	}
+	if _, ok := parents[id]; !ok {
+		return nil
+	}
+	root := id
+	seen := map[string]bool{root: true}
+	for parent := parents[root]; parent != "" && !seen[parent]; parent = parents[parent] {
+		if _, ok := parents[parent]; !ok {
+			break
+		}
+		root = parent
+		seen[root] = true
+	}
+	var related []string
+	visited := map[string]bool{}
+	queue := []string{root}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		if visited[current] {
+			continue
+		}
+		visited[current] = true
+		if current != id {
+			related = append(related, current)
+		}
+		queue = append(queue, children[current]...)
+	}
+	return related
+}
+
+func saveProject(d *State, p Project) (string, error) {
+	p.Number = strings.TrimSpace(p.Number)
+	p.Name = strings.TrimSpace(p.Name)
+	p.Customer = strings.TrimSpace(p.Customer)
+	p.Properties = maps.Clone(p.Properties)
+	if p.Properties == nil {
+		p.Properties = map[string]string{}
+	}
+	for id, value := range p.Properties {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			delete(p.Properties, id)
+		} else {
+			p.Properties[id] = value
+		}
+	}
+	if p.ID == "" {
+		if p.Archived {
+			return "", errors.New("new projects cannot be archived")
+		}
+		p.ID = uuid.NewString()
+		d.Projects = append(d.Projects, p)
+		return p.ID, nil
+	}
+	for i, old := range d.Projects {
+		if old.ID == p.ID {
+			if p.Archived != old.Archived {
+				return "", errors.New("use Delete/Archive or Restore to change archive status")
+			}
+			d.Projects[i] = p
+			return p.ID, nil
+		}
+	}
+	return "", errors.New("project no longer exists")
 }
 
 func (s *Store) Favorite(id string) error {

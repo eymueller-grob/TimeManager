@@ -21,11 +21,12 @@ type Props = {
     required?: boolean;
     autoFocus?: boolean;
     showWeekHint?: boolean;
+    showWeekNumbers?: boolean;
     min?: string;
     max?: string;
 };
 
-export default function DatePicker({label, value: externalValue, onChange, dateTime = false, required, autoFocus, showWeekHint = true, min, max}: Props) {
+export default function DatePicker({label, value: externalValue, onChange, dateTime = false, required, autoFocus, showWeekHint = true, showWeekNumbers = true, min, max}: Props) {
     const [value, setValue] = useState(externalValue);
     useEffect(() => setValue(externalValue), [externalValue]);
     const changeValue = (next: string) => {setValue(next); onChange(next);};
@@ -99,7 +100,7 @@ export default function DatePicker({label, value: externalValue, onChange, dateT
                     setOpen(false);
                     input.current?.focus();
                 }}>
-                <Calendar label={label} mode="single" selected={selected} month={month} onMonthChange={setMonth}
+                <Calendar label={label} showWeekNumber={showWeekNumbers} mode="single" selected={selected} month={month} onMonthChange={setMonth}
                     onSelect={choose} disabled={day =>
                         (min !== undefined && dateKey(day) < min.slice(0, 10)) ||
                         (max !== undefined && dateKey(day) > max.slice(0, 10))}/>

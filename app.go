@@ -176,6 +176,11 @@ func (a *App) SaveProject(p tracker.Project) error {
 	return a.changed(func() error { return a.store.SaveProject(p) })
 }
 
+// SaveProjectWithRelated saves p and applies its color and icon to its whole project tree.
+func (a *App) SaveProjectWithRelated(p tracker.Project) error {
+	return a.changed(func() error { return a.store.SaveProjectWithRelated(p) })
+}
+
 func (a *App) SaveSettings(settings tracker.Settings) error {
 	return a.changed(func() error { return a.store.SaveSettings(settings) })
 }
@@ -404,6 +409,12 @@ func (a *App) ExportBookings(from, to string, options ExportOptions) (string, er
 func (a *App) restoreWindow() {
 	runtime.WindowShow(a.ctx)
 	runtime.WindowUnminimise(a.ctx)
+}
+
+// requestQuitConfirmation shows the window and asks the frontend to confirm quitting.
+func (a *App) requestQuitConfirmation() {
+	a.restoreWindow()
+	runtime.EventsEmit(a.ctx, "close-requested")
 }
 
 func (a *App) showError(err error) {

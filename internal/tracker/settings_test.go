@@ -33,7 +33,7 @@ func TestMigrateVersionOnePreservesData(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := reopened.Snapshot()
-	if d.Version != 7 || d.Settings.Theme != "light" || d.Settings.Reminders != DefaultReminders() || d.PropertyDefinitions == nil || d.Projects[0].ID != p.ID || !d.Active.Start.Equal(legacy.Active.Start) {
+	if d.Version != CurrentVersion || d.Settings.Theme != "light" || d.Settings.Reminders != DefaultReminders() || d.PropertyDefinitions == nil || d.Projects[0].ID != p.ID || !d.Active.Start.Equal(legacy.Active.Start) {
 		t.Fatalf("migration lost data: %#v", d)
 	}
 	saved, err := os.ReadFile(s.path)
@@ -41,7 +41,7 @@ func TestMigrateVersionOnePreservesData(t *testing.T) {
 		t.Fatal(err)
 	}
 	var persisted State
-	if err := json.Unmarshal(saved, &persisted); err != nil || persisted.Version != 7 {
+	if err := json.Unmarshal(saved, &persisted); err != nil || persisted.Version != CurrentVersion {
 		t.Fatalf("migration was not persisted: %v", err)
 	}
 	if _, err := Open(s.path); err != nil {
@@ -145,6 +145,36 @@ func TestPropertyValuesValidationAndIsolation(t *testing.T) {
 	}
 }
 
+func TestMultiselectPropertyValues(t *testing.T) {
+	s := newStore(t)
+	p := addProject(t, s, "1", "")
+	multi := addDefinition(t, s, "Teams", "multiselect", []string{"Dev", "QA", "Ops"})
+	for _, test := range []struct{ name, value string }{
+		{"not JSON", "Dev"}, {"empty list", "[]"}, {"duplicate", `["Dev","Dev"]`},
+		{"unknown option", `["Dev","Sales"]`}, {"not a list", `"Dev"`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			bad := p
+			bad.Properties = map[string]string{multi.ID: test.value}
+			if err := s.SaveProject(bad); err == nil {
+				t.Fatal("invalid multiselect value accepted")
+			}
+		})
+	}
+	p.Properties = map[string]string{multi.ID: `["QA","Dev"]`}
+	if err := s.SaveProject(p); err != nil {
+		t.Fatal(err)
+	}
+	multi.Options = []string{"Dev", "Ops"}
+	if err := s.SavePropertyDefinition(multi); err == nil {
+		t.Fatal("removed used multiselect option")
+	}
+	multi.Options = []string{"Dev", "QA"}
+	if err := s.SavePropertyDefinition(multi); err != nil {
+		t.Fatalf("removing unused option: %v", err)
+	}
+}
+
 func TestDefinitionDeletionIsAtomicAndIncludesArchivedProjects(t *testing.T) {
 	s := newStore(t)
 	p := addProject(t, s, "1", "")
@@ -189,6 +219,8 @@ func TestDefinitionValidation(t *testing.T) {
 		{Name: "", Type: "text"}, {Name: "contact", Type: "text"},
 		{Name: "X", Type: "invalid"}, {Name: "X", Type: "dropdown"},
 		{Name: "X", Type: "dropdown", Options: []string{"A", "A"}},
+		{Name: "X", Type: "multiselect"},
+		{Name: "X", Type: "multiselect", Options: []string{"A", " "}},
 		{Name: "X", Type: "number", Options: []string{"A"}},
 	} {
 		if err := s.SavePropertyDefinition(bad); err == nil {
@@ -204,7 +236,8 @@ func TestExportCustomPropertiesTypes(t *testing.T) {
 	number := addDefinition(t, s, "Rate", "number", nil)
 	check := addDefinition(t, s, "Billable", "checkbox", nil)
 	drop := addDefinition(t, s, "Status", "dropdown", []string{"Open", "Closed"})
-	p.Properties = map[string]string{text.ID: "=1+1", number.ID: "125.5", check.ID: "false", drop.ID: "Open"}
+	multi := addDefinition(t, s, "Teams", "multiselect", []string{"Dev", "QA"})
+	p.Properties = map[string]string{text.ID: "=1+1", number.ID: "125.5", check.ID: "false", drop.ID: "Open", multi.ID: `["QA","Dev"]`}
 	if err := s.SaveProject(p); err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +254,7 @@ func TestExportCustomPropertiesTypes(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	for cell, want := range map[string]string{"I1": "Property: Contact", "I2": "=1+1", "J2": "125.5", "K2": "FALSE", "L2": "Open"} {
+	for cell, want := range map[string]string{"I1": "Property: Contact", "I2": "=1+1", "J2": "125.5", "K2": "FALSE", "L2": "Open", "M2": "QA, Dev"} {
 		got, err := f.GetCellValue("Bookings", cell)
 		if err != nil || got != want {
 			t.Errorf("%s = %q, want %q (%v)", cell, got, want, err)

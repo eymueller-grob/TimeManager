@@ -33,6 +33,8 @@ export function SaveBooking(arg1:main.Booking):Promise<void>;
 
 export function SaveProject(arg1:tracker.Project):Promise<void>;
 
+export function SaveProjectWithRelated(arg1:tracker.Project):Promise<void>;
+
 export function SavePropertyDefinition(arg1:tracker.PropertyDefinition):Promise<void>;
 
 export function SaveSettings(arg1:tracker.Settings):Promise<void>;

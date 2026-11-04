@@ -17,6 +17,7 @@ var (
 	reminderUser   = windows.NewLazySystemDLL("user32.dll")
 	reminderGDI    = windows.NewLazySystemDLL("gdi32.dll")
 	reminderKernel = windows.NewLazySystemDLL("kernel32.dll")
+	reminderDWM    = windows.NewLazySystemDLL("dwmapi.dll")
 )
 
 type reminderRect struct{ Left, Top, Right, Bottom int32 }
@@ -112,42 +113,22 @@ func (a *App) runReminderWindow(ready chan<- struct {
 	if err != nil {
 		return 0, err
 	}
-	var hwnd, title, body, closeButton, openButton, brush uintptr
-	var background, foreground uintptr
+	var hwnd uintptr
+	var painter reminderPainter
+	var content reminderContent
+	var palette reminderPalette
+	var hover int
+	var visible, shownRunning, shownPreview bool
 	var clock tracker.ReminderClock
 	var nativeErr error
-	setText := func(control uintptr, text string) error {
-		value, err := windows.UTF16PtrFromString(text)
-		if err != nil {
-			return err
-		}
-		_, err = nativeReminderCall(reminderUser, "SetWindowTextW", control, uintptr(unsafe.Pointer(value)))
-		return err
-	}
+	invalidate := func() { reminderUser.NewProc("InvalidateRect").Call(hwnd, 0, 0) }
 	hide := func() {
 		reminderUser.NewProc("KillTimer").Call(hwnd, 2)
 		reminderUser.NewProc("ShowWindow").Call(hwnd, 0)
+		visible, hover = false, 0
 	}
 	show := func(running, preview bool) error {
 		d := a.store.Snapshot()
-		heading, text := "No timer is running", "Remember to start a project timer if you are working."
-		if running {
-			heading, text = "Your timer is still running", "Remember to stop and save your timer when you finish working."
-			if d.Active != nil {
-				seconds := int64(time.Since(d.Active.Start).Seconds())
-				if seconds < 0 {
-					seconds = 0
-				}
-				for _, p := range d.Projects {
-					if p.ID == d.Active.ProjectID {
-						text = fmt.Sprintf("%s - %s\nRunning for %02d:%02d:%02d. Stop and save when finished.", p.Number, p.Name, seconds/3600, seconds/60%60, seconds%60)
-					}
-				}
-			}
-		}
-		if preview {
-			heading = "Preview: " + heading
-		}
 		dark := d.Settings.Theme == "dark"
 		if d.Settings.Theme == "system" {
 			key, err := registry.OpenKey(registry.CURRENT_USER, `Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`, registry.QUERY_VALUE)
@@ -161,25 +142,12 @@ func (a *App) runReminderWindow(ready chan<- struct {
 			}
 			dark = value == 0
 		}
-		background, foreground = 0xFFFFFF, 0x4A3425
-		if dark {
-			background, foreground = 0x322319, 0xF4E9E3
-		}
-		nextBrush, err := nativeReminderCall(reminderGDI, "CreateSolidBrush", background)
-		if err != nil {
-			return err
-		}
-		old := brush
-		brush = nextBrush
-		if old != 0 {
-			reminderGDI.NewProc("DeleteObject").Call(old)
-		}
-		if err := setText(title, heading); err != nil {
-			return err
-		}
-		if err := setText(body, text); err != nil {
-			return err
-		}
+		palette = reminderPaletteFor(dark)
+		content = reminderContentFor(d, running, preview, time.Now())
+		shownRunning, shownPreview, hover = running, preview, 0
+		// Windows 11 border color; unsupported on older Windows, where the painted frame is used instead.
+		border := uint32(colorRef(palette.Border))
+		reminderDWM.NewProc("DwmSetWindowAttribute").Call(hwnd, 34, uintptr(unsafe.Pointer(&border)), 4)
 		monitor, err := nativeReminderCall(reminderUser, "MonitorFromPoint", 0, 1)
 		if err != nil {
 			return err
@@ -192,8 +160,10 @@ func (a *App) runReminderWindow(ready chan<- struct {
 		if err != nil {
 			return err
 		}
-		scale := func(n int32) int32 { return n * int32(dpi) / 96 }
-		width, height, margin := scale(390), scale(180), scale(16)
+		if err := painter.setDPI(uint32(dpi)); err != nil {
+			return err
+		}
+		width, height, margin := painter.scale(reminderWidth), painter.scale(reminderHeight), painter.scale(16)
 		x, y := info.Work.Right-width-margin, info.Work.Bottom-height-margin
 		if x < info.Work.Left {
 			x = info.Work.Left
@@ -205,67 +175,91 @@ func (a *App) runReminderWindow(ready chan<- struct {
 		if _, err := nativeReminderCall(reminderUser, "SetWindowPos", hwnd, ^uintptr(0), uintptr(x), uintptr(y), uintptr(width), uintptr(height), 0x0050); err != nil {
 			return err
 		}
-		for _, control := range []struct {
-			h            uintptr
-			x, y, w, hgt int32
-		}{
-			{title, 16, 14, 354, 28}, {body, 16, 48, 354, 64}, {openButton, 16, 126, 168, 32}, {closeButton, 278, 126, 92, 32},
-		} {
-			if _, err := nativeReminderCall(reminderUser, "MoveWindow", control.h, uintptr(scale(control.x)), uintptr(scale(control.y)), uintptr(scale(control.w)), uintptr(scale(control.hgt)), 1); err != nil {
-				return err
-			}
-		}
-		reminderUser.NewProc("InvalidateRect").Call(hwnd, 0, 1)
+		visible = true
+		invalidate()
 		_, err = nativeReminderCall(reminderUser, "SetTimer", hwnd, 2, 15000, 0)
 		return err
 	}
+	logicalPoint := func(lparam uintptr) (int32, int32) {
+		x, y := int32(int16(lparam&0xffff)), int32(int16(lparam>>16&0xffff))
+		if painter.dpi == 0 {
+			return x, y
+		}
+		return x * 96 / int32(painter.dpi), y * 96 / int32(painter.dpi)
+	}
+	var handCursor uintptr
 	proc := windows.NewCallback(func(window uintptr, message uint32, wparam, lparam uintptr) uintptr {
 		switch message {
 		case 0x0010: // WM_CLOSE
 			reminderUser.NewProc("DestroyWindow").Call(window)
 			return 0
-		case 0x0002:
+		case 0x0002: // WM_DESTROY
 			reminderUser.NewProc("PostQuitMessage").Call(0)
 			return 0
-		case 0x0014: // WM_ERASEBKGND
-			if brush != 0 {
-				var rect reminderRect
-				reminderUser.NewProc("GetClientRect").Call(window, uintptr(unsafe.Pointer(&rect)))
-				reminderUser.NewProc("FillRect").Call(wparam, uintptr(unsafe.Pointer(&rect)), brush)
+		case 0x0014: // WM_ERASEBKGND: WM_PAINT covers the whole card.
+			return 1
+		case 0x000F: // WM_PAINT
+			if err := painter.paint(window, content, palette, hover); err != nil && nativeErr == nil {
+				nativeErr = fmt.Errorf("draw reminder: %w", err)
+				reminderUser.NewProc("DestroyWindow").Call(window)
+			}
+			return 0
+		case 0x0021: // WM_MOUSEACTIVATE: clicks must not take focus from other apps.
+			return 3
+		case 0x0020: // WM_SETCURSOR
+			if hover != 0 && handCursor != 0 {
+				reminderUser.NewProc("SetCursor").Call(handCursor)
 				return 1
 			}
-		case 0x0138: // WM_CTLCOLORSTATIC
-			if brush != 0 {
-				reminderGDI.NewProc("SetTextColor").Call(wparam, foreground)
-				reminderGDI.NewProc("SetBkColor").Call(wparam, background)
-				return brush
+		case 0x0200: // WM_MOUSEMOVE
+			if hit := reminderHit(logicalPoint(lparam)); hit != hover {
+				hover = hit
+				invalidate()
 			}
-		case 0x0111:
-			switch wparam & 0xffff {
-			case 100:
+			track := struct {
+				Size, Flags uint32
+				Window      uintptr
+				HoverTime   uint32
+			}{Flags: 2, Window: window}
+			track.Size = uint32(unsafe.Sizeof(track))
+			reminderUser.NewProc("TrackMouseEvent").Call(uintptr(unsafe.Pointer(&track)))
+			return 0
+		case 0x02A3: // WM_MOUSELEAVE
+			if hover != 0 {
+				hover = 0
+				invalidate()
+			}
+			return 0
+		case 0x0202: // WM_LBUTTONUP
+			switch reminderHit(logicalPoint(lparam)) {
+			case reminderDismissID:
 				hide()
-			case 101:
+			case reminderOpenID:
 				hide()
 				go a.restoreWindow()
 			}
 			return 0
-		case 0x0100:
+		case 0x0100: // WM_KEYDOWN
 			if wparam == 0x1b {
 				hide()
 				return 0
 			}
-		case 0x0113:
+		case 0x0113: // WM_TIMER
 			if wparam == 2 {
 				hide()
 				return 0
 			}
+			now := time.Now()
 			d := a.store.Snapshot()
-			due, reset := clock.Poll(time.Now(), d)
+			due, reset := clock.Poll(now, d)
 			if reset {
 				hide()
 			}
 			if due {
 				nativeErr = show(d.Active != nil, false)
+			} else if visible && shownRunning {
+				content = reminderContentFor(d, true, shownPreview, now)
+				invalidate()
 			}
 			if nativeErr != nil {
 				reminderUser.NewProc("DestroyWindow").Call(window)
@@ -285,57 +279,31 @@ func (a *App) runReminderWindow(ready chan<- struct {
 	if err != nil {
 		return 0, err
 	}
-	class := reminderClass{Size: uint32(unsafe.Sizeof(reminderClass{})), Proc: proc, Instance: instance, Cursor: cursor, Background: 6, Name: className}
+	handCursor, err = nativeReminderCall(reminderUser, "LoadCursorW", 0, 32649)
+	if err != nil {
+		return 0, err
+	}
+	// CS_DROPSHADOW gives the borderless card a soft shadow.
+	class := reminderClass{Size: uint32(unsafe.Sizeof(reminderClass{})), Style: 0x00020000, Proc: proc, Instance: instance, Cursor: cursor, Name: className}
 	if _, err := nativeReminderCall(reminderUser, "RegisterClassExW", uintptr(unsafe.Pointer(&class))); err != nil {
 		return 0, err
 	}
 	defer reminderUser.NewProc("UnregisterClassW").Call(uintptr(unsafe.Pointer(className)), instance)
-	create := func(className, text string, style, parent, id uintptr) (uintptr, error) {
-		name, err := windows.UTF16PtrFromString(className)
-		if err != nil {
-			return 0, err
-		}
-		caption, err := windows.UTF16PtrFromString(text)
-		if err != nil {
-			return 0, err
-		}
-		exStyle := uintptr(0)
-		if parent == 0 {
-			exStyle = 0x08000088
-		}
-		return nativeReminderCall(reminderUser, "CreateWindowExW", exStyle, uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(caption)), style, 0, 0, 390, 180, parent, id, instance, 0)
+	caption, err := windows.UTF16PtrFromString("TimeManager reminder")
+	if err != nil {
+		return 0, err
 	}
-	hwnd, err = create("TimeManagerReminderWindow", "TimeManager reminder", 0x80800000, 0, 0)
+	// WS_POPUP; WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE.
+	hwnd, err = nativeReminderCall(reminderUser, "CreateWindowExW", 0x08000088, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(caption)),
+		0x80000000, 0, 0, reminderWidth, reminderHeight, 0, 0, instance, 0)
 	if err != nil {
 		return 0, err
 	}
 	defer reminderUser.NewProc("DestroyWindow").Call(hwnd)
-	defer func() {
-		if brush != 0 {
-			reminderGDI.NewProc("DeleteObject").Call(brush)
-		}
-	}()
-	font, err := nativeReminderCall(reminderGDI, "GetStockObject", 17)
-	if err != nil {
-		return 0, err
-	}
-	for _, control := range []struct {
-		class, text string
-		style, id   uintptr
-		target      *uintptr
-	}{
-		{"STATIC", "", 0x50000000, 102, &title},
-		{"STATIC", "", 0x50000000, 103, &body},
-		{"BUTTON", "Close", 0x50010000, 100, &closeButton},
-		{"BUTTON", "Open TimeManager", 0x50010000, 101, &openButton},
-	} {
-		h, err := create(control.class, control.text, control.style, hwnd, control.id)
-		if err != nil {
-			return 0, err
-		}
-		*control.target = h
-		reminderUser.NewProc("SendMessageW").Call(h, 0x0030, font, 1)
-	}
+	defer painter.release()
+	// Windows 11 rounded corners (DWMWCP_ROUND); older Windows keeps square corners.
+	corner := uint32(2)
+	reminderDWM.NewProc("DwmSetWindowAttribute").Call(hwnd, 33, uintptr(unsafe.Pointer(&corner)), 4)
 	clock.Poll(time.Now(), a.store.Snapshot())
 	if _, err := nativeReminderCall(reminderUser, "SetTimer", hwnd, 1, 1000, 0); err != nil {
 		return 0, err

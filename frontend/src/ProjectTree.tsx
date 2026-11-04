@@ -1,7 +1,7 @@
 import {useId, useRef, useState, type ReactNode} from 'react';
 import {ChevronDown, ChevronRight} from 'lucide-react';
 import {type tracker} from '../wailsjs/go/models';
-import {Button} from './Controls';
+import {Button, ProjectMark} from './Controls';
 import {Input} from './components/ui/input';
 import {Popover, PopoverContent, PopoverTrigger} from './components/ui/popover';
 import {Collapsible, CollapsibleContent, CollapsibleTrigger} from './components/ui/collapsible';
@@ -81,7 +81,7 @@ export function ProjectPicker({label, projects, eligible, value, onChange, requi
         <Popover open={open} onOpenChange={next => {setOpen(next); if (!next) setSearch('');}}>
             <PopoverTrigger asChild><Button id={id} ref={trigger} type="button" autoFocus={autoFocus} role="combobox"
                 aria-labelledby={`${id}-label`} aria-controls={`${id}-choices`} aria-expanded={open} className="project-picker-trigger">
-                <span>{selected ? `${selected.number} - ${projectPath(projects, selected.id)}${selected.archived ? ' (archived)' : ''}` : emptyLabel}</span><ChevronDown/>
+                <span>{selected && <ProjectMark project={selected}/>}{selected ? `${selected.number} - ${projectPath(projects, selected.id)}${selected.archived ? ' (archived)' : ''}` : emptyLabel}</span><ChevronDown/>
             </Button></PopoverTrigger>
             <PopoverContent id={`${id}-choices`} className="project-picker-content" align="start">
                 <Input aria-label={`Search ${label.toLowerCase()}`} placeholder="Search projects…" value={search} onChange={event => setSearch(event.target.value)}/>
@@ -91,7 +91,7 @@ export function ProjectPicker({label, projects, eligible, value, onChange, requi
                         render={(project, context) => context ? <span className="tree-context">{project.number} - {project.name}</span> :
                             <Button type="button" variant={project.id === value ? 'secondary' : 'ghost'} aria-pressed={project.id === value}
                                 onClick={() => {onChange(project.id); setOpen(false); setSearch('');}}>
-                                <span className="dot" style={{background: project.color}}/>{project.number} - {project.name}{project.archived ? ' (archived)' : ''}
+                                <ProjectMark project={project}/>{project.number} - {project.name}{project.archived ? ' (archived)' : ''}
                             </Button>}/>
                     {!matches.length && <p role="status" className="hint">No projects match.</p>}
                 </div>

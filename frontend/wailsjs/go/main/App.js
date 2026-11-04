@@ -62,6 +62,10 @@ export function SaveProject(arg1) {
   return window['go']['main']['App']['SaveProject'](arg1);
 }
 
+export function SaveProjectWithRelated(arg1) {
+  return window['go']['main']['App']['SaveProjectWithRelated'](arg1);
+}
+
 export function SavePropertyDefinition(arg1) {
   return window['go']['main']['App']['SavePropertyDefinition'](arg1);
 }

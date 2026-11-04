@@ -19,6 +19,9 @@ func TestAppRequiresReadyStore(t *testing.T) {
 	if err := app.SaveProject(tracker.Project{}); err == nil || !strings.Contains(err.Error(), "data store is not ready") {
 		t.Fatalf("SaveProject() error = %v, want store-not-ready", err)
 	}
+	if err := app.SaveProjectWithRelated(tracker.Project{}); err == nil || !strings.Contains(err.Error(), "data store is not ready") {
+		t.Fatalf("SaveProjectWithRelated() error = %v, want store-not-ready", err)
+	}
 	for name, action := range map[string]func() error{
 		"RunInBackground": app.RunInBackground,
 		"QuitApplication": app.QuitApplication,
