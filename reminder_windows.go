@@ -142,7 +142,11 @@ func (a *App) runReminderWindow(ready chan<- struct {
 			}
 			dark = value == 0
 		}
-		palette = reminderPaletteFor(dark)
+		if d.Settings.Theme == "win95" {
+			palette = reminderPaletteWin95()
+		} else {
+			palette = reminderPaletteFor(dark)
+		}
 		content = reminderContentFor(d, running, preview, time.Now())
 		shownRunning, shownPreview, hover = running, preview, 0
 		// Windows 11 border color; unsupported on older Windows, where the painted frame is used instead.

@@ -1287,6 +1287,21 @@ describe('TimeManager workspace', () => {
     expect(screen.getByRole('heading', {name: 'Project properties'})).toBeInTheDocument();
   });
 
+  it('saves and applies the Windows 95 appearance without using dark native chrome', async () => {
+    const user = userEvent.setup();
+    await renderLoaded();
+    await user.click(screen.getByRole('button', {name: 'Settings'}));
+    await user.selectOptions(screen.getByLabelText('Color theme'), 'win95');
+    expect(SaveSettings).toHaveBeenCalledWith(expect.objectContaining({theme: 'win95', reminders: defaultReminders()}));
+    vi.mocked(GetState).mockResolvedValue(state({settings: Object.assign(new tracker.Settings(), {theme: 'win95', reminders: defaultReminders()})}));
+    const listener = vi.mocked(EventsOn).mock.calls.find(([name]) => name === 'data-changed')?.[1];
+    if (!listener) throw new Error('data-changed listener is not registered');
+    act(() => listener());
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe('win95'));
+    expect(document.documentElement.classList.contains('dark')).toBe(false);
+    expect(WindowSetLightTheme).toHaveBeenCalled();
+  });
+
   it('shows settings save errors without switching the theme', async () => {
     const user = userEvent.setup();
     vi.mocked(SaveSettings).mockRejectedValueOnce(new Error('Disk is full'));

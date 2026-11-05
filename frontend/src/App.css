@@ -181,6 +181,51 @@ fieldset:disabled :is([data-slot="checkbox"], [data-slot="button"], [data-slot="
 .calendar { --rdp-accent-color: var(--primary); }
 .calendar .week_number, .calendar .week_number_header { min-width: 36px; }
 .calendar [data-selected="true"] > button { background: var(--primary); color: var(--primary-foreground); }
+
+html[data-theme="win95"] body { font-family: "MS Sans Serif", Tahoma, sans-serif; font-size: 13px; }
+html[data-theme="win95"] .shell { background: #008080; }
+html[data-theme="win95"] .sidebar { padding: 14px 10px; border-right: 2px solid #fff; box-shadow: inset -1px 0 #808080; }
+html[data-theme="win95"] .brand { margin-bottom: 20px; color: #000080; }
+html[data-theme="win95"] .brand-mark { border: 2px outset #dfdfdf; }
+html[data-theme="win95"] .workspace { padding: 12px 18px 22px; }
+html[data-theme="win95"] .panel,
+html[data-theme="win95"] .timer-panel,
+html[data-theme="win95"] .favorite-card,
+html[data-theme="win95"] [data-slot="card"] { border: 2px outset #dfdfdf; border-radius: 0; box-shadow: 1px 1px #000; }
+html[data-theme="win95"] .panel { padding: 12px; }
+html[data-theme="win95"] .timer-panel { padding: 10px 12px; }
+html[data-theme="win95"] .timer-panel.running,
+html[data-theme="win95"] .timer-panel.paused,
+html[data-theme="win95"] .favorite-card.active,
+html[data-theme="win95"] .running-project,
+html[data-theme="win95"] .paused-project { background: #000080; color: #fff; }
+html[data-theme="win95"] .timer-panel p:last-child,
+html[data-theme="win95"] .favorite-card small,
+html[data-theme="win95"] .card-customer,
+html[data-theme="win95"] .project-number,
+html[data-theme="win95"] .subtitle,
+html[data-theme="win95"] .section-heading p,
+html[data-theme="win95"] .hint { color: #404040; }
+html[data-theme="win95"] .timer-panel.running p:last-child,
+html[data-theme="win95"] .timer-panel.paused p:last-child,
+html[data-theme="win95"] .favorite-card.active small,
+html[data-theme="win95"] .favorite-card.active .card-customer { color: #fff; }
+html[data-theme="win95"] nav [data-slot="button"] { height: 32px; border: 2px outset #dfdfdf; border-radius: 0; color: #000; }
+html[data-theme="win95"] nav [data-slot="button"].selected { background: #000080; color: #fff; }
+html[data-theme="win95"] button,
+html[data-theme="win95"] [data-slot="button"] { border: 2px outset #dfdfdf; border-radius: 0; background: #c0c0c0; color: #000; box-shadow: 1px 1px #000; }
+html[data-theme="win95"] button:active,
+html[data-theme="win95"] [data-slot="button"]:active { border-style: inset; box-shadow: none; }
+html[data-theme="win95"] [data-slot="button"].primary,
+html[data-theme="win95"] [data-slot="button"][data-variant="default"] { background: #000080; color: #fff; }
+html[data-theme="win95"] input,
+html[data-theme="win95"] textarea,
+html[data-theme="win95"] select { border: 2px inset #dfdfdf; border-radius: 0; background: #fff; color: #000; }
+html[data-theme="win95"] .banner,
+html[data-theme="win95"] .error,
+html[data-theme="win95"] .success { border-radius: 0; box-shadow: 1px 1px #000; }
+html[data-theme="win95"] .running-badge { border-radius: 0; background: #fff; color: #000080; }
+html[data-theme="win95"] .dot { border-radius: 0; }
 .week-controls .date-picker { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; width: 260px; }
 .week-controls .date-picker > label { margin-bottom: 0; white-space: nowrap; }
 .week-controls .date-picker > .error { grid-column: 1 / -1; }

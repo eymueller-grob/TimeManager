@@ -69,10 +69,11 @@ func TestReminderHit(t *testing.T) {
 
 func TestReminderPalettes(t *testing.T) {
 	light, dark := reminderPaletteFor(false), reminderPaletteFor(true)
+	win95 := reminderPaletteWin95()
 	if light == dark {
 		t.Fatal("light and dark palettes are identical")
 	}
-	for name, p := range map[string]reminderPalette{"light": light, "dark": dark} {
+	for name, p := range map[string]reminderPalette{"light": light, "dark": dark, "win95": win95} {
 		if p.Background == p.Foreground || p.Primary == p.PrimaryText || p.Primary == p.PrimaryHover || p.Background == p.OutlineHover {
 			t.Errorf("%s palette lacks contrast or hover feedback: %+v", name, p)
 		}

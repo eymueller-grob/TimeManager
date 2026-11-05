@@ -77,6 +77,16 @@ func reminderPaletteFor(dark bool) reminderPalette {
 		PrimaryText: rgb(0xfa, 0xfa, 0xfa), OutlineHover: rgb(0xf5, 0xf5, 0xf5)}
 }
 
+func reminderPaletteWin95() reminderPalette {
+	rgb := func(r, g, b uint8) color.NRGBA { return color.NRGBA{R: r, G: g, B: b, A: 0xff} }
+	return reminderPalette{
+		Background: rgb(0xc0, 0xc0, 0xc0), Foreground: rgb(0x00, 0x00, 0x00),
+		Muted: rgb(0x40, 0x40, 0x40), Border: rgb(0x80, 0x80, 0x80),
+		Primary: rgb(0x00, 0x00, 0x80), PrimaryHover: rgb(0x00, 0x00, 0xa0),
+		PrimaryText: rgb(0xff, 0xff, 0xff), OutlineHover: rgb(0xdf, 0xdf, 0xdf),
+	}
+}
+
 func colorRef(c color.NRGBA) uintptr { return uintptr(c.R) | uintptr(c.G)<<8 | uintptr(c.B)<<16 }
 
 // reminderHit returns the button ID at a logical point, or 0.

@@ -54,9 +54,9 @@ type PropertyDefinition struct {
 
 func validateSettings(d State) error {
 	switch d.Settings.Theme {
-	case "light", "dark", "system":
+	case "light", "dark", "system", "win95":
 	default:
-		return errors.New("appearance must be light, dark, or system")
+		return errors.New("appearance must be light, dark, system, or win95")
 	}
 	definitions := make(map[string]PropertyDefinition)
 	names := make(map[string]bool)

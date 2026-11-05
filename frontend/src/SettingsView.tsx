@@ -86,8 +86,9 @@ export default function SettingsView({settings, definitions, busy, saveSettings,
             <div className="section-heading"><div><h2>Appearance</h2><p>Your preference is saved on this computer.</p></div></div>
             <Label className="appearance-control">Color theme<NativeSelect value={settings.theme} disabled={busy} onChange={e => void saveSettings(Object.assign(new tracker.Settings(), settings, {theme: e.target.value}))}>
                 <NativeSelectOption value="light">Light</NativeSelectOption><NativeSelectOption value="dark">Dark</NativeSelectOption><NativeSelectOption value="system">Follow Windows / system</NativeSelectOption>
+                <NativeSelectOption value="win95">Windows 95</NativeSelectOption>
             </NativeSelect></Label>
-            <p className="hint">System mode follows the operating system's color preference and updates when it changes.</p>
+            <p className="hint">System mode follows the operating system's color preference and updates when it changes. Windows 95 uses a classic gray, teal, and navy desktop style.</p>
         </Card>
         <Card className="panel">
             <div className="section-heading"><div><h2>Temporary timer</h2><p>Choose how unassigned time is saved.</p></div></div>

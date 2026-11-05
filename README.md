@@ -40,7 +40,9 @@ Customize its appearance and shared project properties in Settings.
   and active parent. An archived parent is cleared so you can choose an active
   parent instead. Copies are always active. Subprojects, bookings, and timers
   are not copied; Cancel leaves saved data unchanged.
-- **Settings / Appearance:** choose Light, Dark, or Follow Windows/system.
+- **Settings / Appearance:** choose Light, Dark, Follow Windows/system, or
+  **Windows 95**. The Windows 95 mode uses a classic gray, teal, and navy
+  desktop style.
   The preference is saved locally. System mode updates when the operating
   system's color preference changes. Existing installations initially retain
   the light appearance. Navigation selections use flat backgrounds, and panels,

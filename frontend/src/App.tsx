@@ -402,7 +402,7 @@ function App() {
         const media = window.matchMedia('(prefers-color-scheme: dark)');
         const apply = () => {
             const dark = theme === 'dark' || (theme === 'system' && media.matches);
-            document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+            document.documentElement.dataset.theme = theme === 'win95' ? 'win95' : dark ? 'dark' : 'light';
             document.documentElement.classList.toggle('dark', dark);
             if (dark) WindowSetDarkTheme();
             else WindowSetLightTheme();

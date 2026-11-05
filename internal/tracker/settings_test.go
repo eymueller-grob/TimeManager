@@ -66,7 +66,7 @@ func TestInvalidLegacyDataNotMigrated(t *testing.T) {
 
 func TestSettingsPersistenceAndFailure(t *testing.T) {
 	s := newStore(t)
-	for _, theme := range []string{"dark", "system", "light"} {
+	for _, theme := range []string{"dark", "system", "light", "win95"} {
 		settings := DefaultSettings()
 		settings.Theme = theme
 		if err := s.SaveSettings(settings); err != nil {
@@ -81,7 +81,7 @@ func TestSettingsPersistenceAndFailure(t *testing.T) {
 		t.Fatal("invalid theme accepted")
 	}
 	s.path = filepath.Join(t.TempDir(), "missing", "data.json")
-	if err := s.SaveSettings(Settings{Theme: "dark"}); err == nil || s.Snapshot().Settings.Theme != "light" {
+	if err := s.SaveSettings(Settings{Theme: "dark"}); err == nil || s.Snapshot().Settings.Theme != "win95" {
 		t.Fatal("failed settings save mutated memory")
 	}
 }

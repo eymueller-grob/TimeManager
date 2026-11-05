@@ -17,3 +17,35 @@
     @apply bg-background text-foreground; }
   html {
     @apply font-sans; } }
+
+html[data-theme="win95"] {
+  color-scheme: light;
+  font-family: "MS Sans Serif", Tahoma, sans-serif;
+  --background: #008080;
+  --foreground: #000;
+  --card: #c0c0c0;
+  --card-foreground: #000;
+  --popover: #c0c0c0;
+  --popover-foreground: #000;
+  --primary: #000080;
+  --primary-foreground: #fff;
+  --secondary: #dfdfdf;
+  --secondary-foreground: #000;
+  --muted: #008080;
+  --muted-foreground: #404040;
+  --accent: #000080;
+  --accent-foreground: #fff;
+  --destructive: #800000;
+  --border: #808080;
+  --input: #fff;
+  --ring: #000;
+  --sidebar: #c0c0c0;
+  --sidebar-foreground: #000;
+  --sidebar-primary: #000080;
+  --sidebar-primary-foreground: #fff;
+  --sidebar-accent: #000080;
+  --sidebar-accent-foreground: #fff;
+  --sidebar-border: #808080;
+  --sidebar-ring: #000;
+  --radius: 0;
+}
